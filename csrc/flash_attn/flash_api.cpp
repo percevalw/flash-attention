@@ -1248,7 +1248,7 @@ mha_varlen_bwd(const at::Tensor &dout,  // total_q x num_heads, x head_size
         dv = dv.index({"...", torch::indexing::Slice(torch::indexing::None, head_size_og)});
     }
 
-    return {x dq, dk, dv, softmax_d };
+    return { dq, dk, dv, softmax_d };
 }
 
 std::vector<at::Tensor>
