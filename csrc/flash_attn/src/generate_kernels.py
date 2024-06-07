@@ -11,7 +11,7 @@ from typing import List, Optional
 
 DTYPE_MAP = {
     "fp16": "cutlass::half_t",
-    "bf16": "cutlass::bfloat16_t",
+    # "bf16": "cutlass::bfloat16_t",
 }
 
 SM = [80]  # Sm80 kernels support up to
