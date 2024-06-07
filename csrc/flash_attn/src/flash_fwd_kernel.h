@@ -119,6 +119,14 @@ inline __device__ void compute_attn_1rowblock(const Params &params, const int bi
                             make_stride(params.q_row_stride, params.q_head_stride, _1{}));
     Tensor gQ = local_tile(mQ(_, bidh, _), Shape<Int<kBlockM>, Int<kHeadDim>>{},
                            make_coord(m_block, 0));  // (kBlockM, kHeadDim)
+    Tensor mQP = make_tensor(make_gmem_ptr(reinterpret_cast<Element*>(params.qp_ptr)
+                                          + binfo.q_offset(params.qp_batch_stride, params.qp_row_stride, bidb)),
+                            make_shape(binfo.actual_seqlen_q, params.h, params.num_pos),
+                            make_stride(params.qp_row_stride, params.qp_head_stride, _1{}));
+    Tensor gQP = local_tile(mQP(_, bidh, _),
+                            make_shape(Int<kBlockM>, params.num_pos)
+                            // Shape<Int<kBlockM>, Int<kHeadDim>>{},
+                            make_coord(m_block, 0));  // (kBlockM, num_pos)
     Tensor mK = make_tensor(make_gmem_ptr(reinterpret_cast<Element*>(params.k_ptr)
                                           + binfo.k_offset(params.k_batch_stride, params.k_row_stride, bidb)),
                             make_shape(binfo.actual_seqlen_k, params.h_k, params.d),
@@ -573,6 +581,14 @@ inline __device__ void compute_attn_1rowblock_splitkv(const Params &params, cons
                             make_stride(params.q_row_stride, params.q_head_stride, _1{}));
     Tensor gQ = local_tile(mQ(_, bidh, _), Shape<Int<kBlockM>, Int<kHeadDim>>{},
                            make_coord(m_block, 0));  // (kBlockM, kHeadDim)
+    Tensor mQP = make_tensor(make_gmem_ptr(reinterpret_cast<Element*>(params.qp_ptr)
+                                          + binfo.q_offset(params.qp_batch_stride, params.qp_row_stride, bidb)),
+                            make_shape(binfo.actual_seqlen_q, params.h, params.num_pos),
+                            make_stride(params.qp_row_stride, params.qp_head_stride, _1{}));
+    Tensor gQP = local_tile(mQP(_, bidh, _),
+                            make_shape(Int<kBlockM>, params.num_pos)
+                            // Shape<Int<kBlockM>, Int<kHeadDim>>{},
+                            make_coord(m_block, 0));  // (kBlockM, num_pos)
     Tensor gK = make_tensor(make_gmem_ptr(reinterpret_cast<Element *>(params.k_ptr) + row_offset_k),
                             Shape<Int<kBlockN>, Int<kHeadDim>>{},
                             make_stride(params.k_row_stride, _1{}));

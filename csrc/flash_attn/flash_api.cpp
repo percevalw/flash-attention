@@ -29,10 +29,12 @@ void set_params_fprop(Flash_fwd_params &params,
                       const size_t h_k,
                       const size_t d,
                       const size_t d_rounded,
+                      const size_t num_pos,
                       // device pointers
                       const at::Tensor q,
                       const at::Tensor k,
                       const at::Tensor v,
+                      const at::Tensor qp,
                       at::Tensor out,
                       void *cu_seqlens_q_d,
                       void *cu_seqlens_k_d,
@@ -54,6 +56,7 @@ void set_params_fprop(Flash_fwd_params &params,
     params.q_ptr = q.data_ptr();
     params.k_ptr = k.data_ptr();
     params.v_ptr = v.data_ptr();
+    params.qp_ptr = qp.data_ptr();
     // All stride are in elements, not bytes.
     params.q_row_stride = q.stride(-3);
     params.k_row_stride = k.stride(-3);
@@ -97,6 +100,7 @@ void set_params_fprop(Flash_fwd_params &params,
     params.seqlen_k_rounded = seqlen_k_rounded;
     params.d = d;
     params.d_rounded = d_rounded;
+    params.num_pos = num_pos;
 
     // Set the different scale values.
     params.scale_softmax = softmax_scale;
@@ -148,10 +152,12 @@ void set_params_dgrad(Flash_bwd_params &params,
                       const size_t h_k,
                       const size_t d,
                       const size_t d_rounded,
+                      const size_t num_pos,
                       // device pointers
                       const at::Tensor q,
                       const at::Tensor k,
                       const at::Tensor v,
+                      const at::Tensor qp,
                       const at::Tensor out,
                       const at::Tensor dout,
                       at::Tensor dq,
@@ -171,8 +177,8 @@ void set_params_dgrad(Flash_bwd_params &params,
                       bool deterministic) {
 
     set_params_fprop(params,
-                     b, seqlen_q, seqlen_k, seqlen_q_rounded, seqlen_k_rounded, h, h_k, d, d_rounded,
-                     q, k, v, out,
+                     b, seqlen_q, seqlen_k, seqlen_q_rounded, seqlen_k_rounded, h, h_k, d, d_rounded, num_pos,
+                     q, k, v, qp,out,
                      cu_seqlens_q_d,
                      cu_seqlens_k_d,
                      nullptr,
@@ -318,6 +324,7 @@ std::vector<at::Tensor>
 mha_fwd(at::Tensor &q,         // batch_size x seqlen_q x num_heads x head_size
         const at::Tensor &k,         // batch_size x seqlen_k x num_heads_k x head_size
         const at::Tensor &v,         // batch_size x seqlen_k x num_heads_k x head_size
+        const at::Tensor &qp,         // batch_size x seqlen_k x num_heads_k x num_pos
         c10::optional<at::Tensor> &out_,             // batch_size x seqlen_q x num_heads x head_size
         c10::optional<at::Tensor> &alibi_slopes_, // num_heads or batch_size x num_heads
         const float p_dropout,
@@ -359,6 +366,7 @@ mha_fwd(at::Tensor &q,         // batch_size x seqlen_q x num_heads x head_size
     const int head_size_og = sizes[3];
     const int seqlen_k = k.size(1);
     const int num_heads_k = k.size(2);
+    const int num_pos = qp.size(3);
     TORCH_CHECK(batch_size > 0, "batch size must be postive");
     TORCH_CHECK(head_size_og <= 256, "FlashAttention forward only supports head dimension at most 256");
     TORCH_CHECK(num_heads % num_heads_k == 0, "Number of heads in key/value must divide number of heads in query");
@@ -389,10 +397,12 @@ mha_fwd(at::Tensor &q,         // batch_size x seqlen_q x num_heads x head_size
         q_padded = torch::nn::functional::pad(q, torch::nn::functional::PadFuncOptions({0, 8 - head_size_og % 8}));
         k_padded = torch::nn::functional::pad(k, torch::nn::functional::PadFuncOptions({0, 8 - head_size_og % 8}));
         v_padded = torch::nn::functional::pad(v, torch::nn::functional::PadFuncOptions({0, 8 - head_size_og % 8}));
+        qp_padded = torch::nn::functional::pad(qp, torch::nn::functional::PadFuncOptions({0, 8 - head_size_og % 8}));
     } else {
         q_padded = q;
         k_padded = k;
         v_padded = v;
+        qp_padded = qp;
     }
 
     at::Tensor out;
@@ -437,7 +447,8 @@ mha_fwd(at::Tensor &q,         // batch_size x seqlen_q x num_heads x head_size
                      seqlen_q_rounded, seqlen_k_rounded,
                      num_heads, num_heads_k,
                      head_size, head_size_rounded,
-                     q_padded, k_padded, v_padded, out,
+                     num_pos,
+                     q_padded, k_padded, v_padded, qp_padded, out,
                      /*cu_seqlens_q_d=*/nullptr,
                      /*cu_seqlens_k_d=*/nullptr,
                      /*seqused_k=*/nullptr,
@@ -500,6 +511,7 @@ std::vector<at::Tensor>
 mha_varlen_fwd(at::Tensor &q,  // total_q x num_heads x head_size, total_q := \sum_{i=0}^{b} s_i
                const at::Tensor &k,  // total_k x num_heads_k x head_size, total_k := \sum_{i=0}^{b} s_i or num_blocks x page_block_size x num_heads_k x head_size if there's a block_table.
                const at::Tensor &v,  // total_k x num_heads_k x head_size, total_k := \sum_{i=0}^{b} s_i or num_blocks x page_block_size x num_heads_k x head_size if there's a block_table.
+               const at::Tensor &qp,  // total_k x num_heads_k x num_pos, total_k := \sum_{i=0}^{b} s_i or num_blocks x page_block_size x num_heads_k x head_size if there's a block_table.
                c10::optional<at::Tensor> &out_, // total_q x num_heads x head_size, total_k := \sum_{i=0}^{b} s_i
                const at::Tensor &cu_seqlens_q,  // b+1
                const at::Tensor &cu_seqlens_k,  // b+1
@@ -561,6 +573,7 @@ mha_varlen_fwd(at::Tensor &q,  // total_q x num_heads x head_size, total_q := \s
     int num_heads = sizes[1];
     const int head_size_og = sizes[2];
     const int num_heads_k = paged_KV ? k.size(2) : k.size(1);
+    const int num_pos = qp.size(3);
 
     const int max_num_blocks_per_seq = !paged_KV ? 0 : block_table.size(1);
     const int num_blocks = !paged_KV ? 0 : k.size(0);
@@ -618,10 +631,12 @@ mha_varlen_fwd(at::Tensor &q,  // total_q x num_heads x head_size, total_q := \s
         q_padded = torch::nn::functional::pad(q, torch::nn::functional::PadFuncOptions({0, 8 - head_size_og % 8}));
         k_padded = torch::nn::functional::pad(k, torch::nn::functional::PadFuncOptions({0, 8 - head_size_og % 8}));
         v_padded = torch::nn::functional::pad(v, torch::nn::functional::PadFuncOptions({0, 8 - head_size_og % 8}));
+        qp_padded = torch::nn::functional::pad(qp, torch::nn::functional::PadFuncOptions({0, 8 - head_size_og % 8}));
     } else {
         q_padded = q;
         k_padded = k;
         v_padded = v;
+        qp_padded = qp;
     }
 
     at::Tensor out;
@@ -673,7 +688,8 @@ mha_varlen_fwd(at::Tensor &q,  // total_q x num_heads x head_size, total_q := \s
                      seqlen_q_rounded, seqlen_k_rounded,
                      num_heads, num_heads_k,
                      head_size, head_size_rounded,
-                     q_padded, k_padded, v_padded, out,
+                     num_pos,
+                     q_padded, k_padded, v_padded, qp_padded, out,
                      cu_seqlens_q_d,
                      cu_seqlens_k.data_ptr(),
                      seqused_k.has_value() ? seqused_k.value().data_ptr() : nullptr,
@@ -758,6 +774,7 @@ mha_bwd(const at::Tensor &dout,  // batch_size x seqlen_q x num_heads, x head_si
         const at::Tensor &q,   // batch_size x seqlen_q x num_heads x head_size
         const at::Tensor &k,   // batch_size x seqlen_k x num_heads_k x head_size
         const at::Tensor &v,   // batch_size x seqlen_k x num_heads_k x head_size
+        const at::Tensor &qp,   // batch_size x seqlen_k x num_heads_k x head_size
         const at::Tensor &out,   // batch_size x seqlen_q x num_heads x head_size
         const at::Tensor &softmax_lse,     // b x h x seqlen_q
         c10::optional<at::Tensor> &dq_,   // batch_size x seqlen_q x num_heads x head_size
@@ -818,6 +835,7 @@ mha_bwd(const at::Tensor &dout,  // batch_size x seqlen_q x num_heads, x head_si
     const int head_size = sizes[3];
     const int seqlen_k = k.size(1);
     const int num_heads_k = k.size(2);
+    const int num_pos = qp.size(3);
     TORCH_CHECK(batch_size > 0, "batch size must be positive");
     TORCH_CHECK(head_size % 8 == 0, "head_size should be a multiple of 8");
     TORCH_CHECK(head_size <= 256, "FlashAttention backward only supports head dimension at most 256");
@@ -918,7 +936,8 @@ mha_bwd(const at::Tensor &dout,  // batch_size x seqlen_q x num_heads, x head_si
                      seqlen_q_rounded, seqlen_k_rounded,
                      num_heads, num_heads_k,
                      head_size, head_size_rounded,
-                     q, k, v, out,
+                     num_pos,
+                     q, k, v, qp, out,
                      dout_padded, dq, dk_expanded, dv_expanded,
                      nullptr,
                      nullptr,
@@ -985,6 +1004,7 @@ mha_varlen_bwd(const at::Tensor &dout,  // total_q x num_heads, x head_size
                const at::Tensor &q,   // total_q x num_heads x head_size, total_q := \sum_{i=0}^{b} s_i
                const at::Tensor &k,   // total_k x num_heads_k x head_size, total_k := \sum_{i=0}^{b} s_i
                const at::Tensor &v,   // total_k x num_heads_k x head_size, total_k := \sum_{i=0}^{b} s_i
+               const at::Tensor &qp,   // total_k x num_heads_k x head_size, total_k := \sum_{i=0}^{b} s_i
                const at::Tensor &out,   // total_q x num_heads x head_size
                const at::Tensor &softmax_lse,     // b x h x s   softmax logsumexp
                c10::optional<at::Tensor> &dq_,   // total_q x num_heads x head_size, total_q := \sum_{i=0}^{b} s_i
@@ -1053,6 +1073,7 @@ mha_varlen_bwd(const at::Tensor &dout,  // total_q x num_heads, x head_size
     const int num_heads = sizes[1];
     const int head_size_og = dout.size(2);
     const int head_size = sizes[2];
+    const int num_pos = qp.size(3);
     const int total_k = k.size(0);
     const int num_heads_k = k.size(1);
     TORCH_CHECK(batch_size > 0, "batch size must be positive");
@@ -1169,7 +1190,8 @@ mha_varlen_bwd(const at::Tensor &dout,  // total_q x num_heads, x head_size
                      seqlen_q_rounded, seqlen_k_rounded,
                      num_heads, num_heads_k,
                      head_size, head_size_rounded,
-                     q, k, v, out,
+                     num_pos,
+                     q, k, v, qp, out,
                      dout_padded, dq, dk_expanded, dv_expanded,
                      cu_seqlens_q.data_ptr(),
                      cu_seqlens_k.data_ptr(),
@@ -1226,7 +1248,7 @@ mha_varlen_bwd(const at::Tensor &dout,  // total_q x num_heads, x head_size
         dv = dv.index({"...", torch::indexing::Slice(torch::indexing::None, head_size_og)});
     }
 
-    return { dq, dk, dv, softmax_d };
+    return {x dq, dk, dv, softmax_d };
 }
 
 std::vector<at::Tensor>
@@ -1333,10 +1355,12 @@ mha_fwd_kvcache(at::Tensor &q,                 // batch_size x seqlen_q x num_he
         q_padded = torch::nn::functional::pad(q, torch::nn::functional::PadFuncOptions({0, 8 - head_size_og % 8}));
         kcache_padded = torch::nn::functional::pad(kcache, torch::nn::functional::PadFuncOptions({0, 8 - head_size_og % 8}));
         vcache_padded = torch::nn::functional::pad(vcache, torch::nn::functional::PadFuncOptions({0, 8 - head_size_og % 8}));
+        qp_padded = torch::nn::functional::pad(qp, torch::nn::functional::PadFuncOptions({0, 8 - head_size_og % 8}));
     } else {
         q_padded = q;
         kcache_padded = kcache;
         vcache_padded = vcache;
+        qp_padded = qp;
     }
 
     at::Tensor out;
@@ -1372,7 +1396,8 @@ mha_fwd_kvcache(at::Tensor &q,                 // batch_size x seqlen_q x num_he
                      seqlen_q_rounded, seqlen_k_rounded,
                      num_heads, num_heads_k,
                      head_size, head_size_rounded,
-                     q_padded, kcache_padded, vcache_padded, out,
+                     num_pos,
+                     q_padded, kcache_padded, vcache_padded, qp_padded, out,
                      /*cu_seqlens_q_d=*/nullptr,
                      /*cu_seqlens_k_d=*/nullptr,
                      /*seqused_k=*/nullptr,

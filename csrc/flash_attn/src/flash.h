@@ -27,17 +27,21 @@ struct Qkv_params {
     void *__restrict__ q_ptr;
     void *__restrict__ k_ptr;
     void *__restrict__ v_ptr;
+    void *__restrict__ qp_ptr;
 
     // The stride between rows of the Q, K and V matrices.
     index_t q_batch_stride;
     index_t k_batch_stride;
     index_t v_batch_stride;
+    index_t qp_batch_stride;
     index_t q_row_stride;
     index_t k_row_stride;
     index_t v_row_stride;
+    index_t qp_row_stride;
     index_t q_head_stride;
     index_t k_head_stride;
     index_t v_head_stride;
+    index_t qp_head_stride;
 
     // The number of heads.
     int h, h_k;
@@ -67,7 +71,7 @@ struct Flash_fwd_params : public Qkv_params {
     void * __restrict__ softmax_lseaccum_ptr;
 
     // The dimensions.
-    int b, seqlen_q, seqlen_k, seqlen_knew, d, seqlen_q_rounded, seqlen_k_rounded, d_rounded, rotary_dim;
+    int b, seqlen_q, seqlen_k, seqlen_knew, d, seqlen_q_rounded, seqlen_k_rounded, d_rounded, num_rel_pos, rotary_dim;
 
     // The scaling factors for the kernel.
     float scale_softmax;
