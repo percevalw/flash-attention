@@ -124,7 +124,7 @@ inline __device__ void compute_attn_1rowblock(const Params &params, const int bi
                             make_shape(binfo.actual_seqlen_q, params.h, params.num_pos),
                             make_stride(params.qp_row_stride, params.qp_head_stride, _1{}));
     Tensor gQP = local_tile(mQP(_, bidh, _),
-                            make_shape(Int<kBlockM>, params.num_pos)
+                            make_shape(Int<kBlockM>, params.num_pos),
                             // Shape<Int<kBlockM>, Int<kHeadDim>>{},
                             make_coord(m_block, 0));  // (kBlockM, num_pos)
     Tensor mK = make_tensor(make_gmem_ptr(reinterpret_cast<Element*>(params.k_ptr)
@@ -586,7 +586,7 @@ inline __device__ void compute_attn_1rowblock_splitkv(const Params &params, cons
                             make_shape(binfo.actual_seqlen_q, params.h, params.num_pos),
                             make_stride(params.qp_row_stride, params.qp_head_stride, _1{}));
     Tensor gQP = local_tile(mQP(_, bidh, _),
-                            make_shape(Int<kBlockM>, params.num_pos)
+                            make_shape(Int<kBlockM>, params.num_pos),
                             // Shape<Int<kBlockM>, Int<kHeadDim>>{},
                             make_coord(m_block, 0));  // (kBlockM, num_pos)
     Tensor gK = make_tensor(make_gmem_ptr(reinterpret_cast<Element *>(params.k_ptr) + row_offset_k),
