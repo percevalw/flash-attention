@@ -128,7 +128,7 @@ void run_flash_bwd(Flash_bwd_params &params, cudaStream_t stream) {
 #endif
 }
 
-template<typename T>
+/*template<typename T>
 void run_mha_bwd_hdim32(Flash_bwd_params &params, cudaStream_t stream) {
     constexpr static int Headdim = 32;
     int device;
@@ -221,7 +221,7 @@ void run_mha_bwd_hdim96(Flash_bwd_params &params, cudaStream_t stream) {
             run_flash_bwd<Flash_bwd_kernel_traits<Headdim, 64, 128, 8, 2, 4, 4, true, false, T>, Is_dropout>(params, stream);
         }
     });
-}
+}*/
 
 template<typename T>
 void run_mha_bwd_hdim128(Flash_bwd_params &params, cudaStream_t stream) {
@@ -257,7 +257,7 @@ void run_mha_bwd_hdim128(Flash_bwd_params &params, cudaStream_t stream) {
     });
 }
 
-template<typename T>
+/*template<typename T>
 void run_mha_bwd_hdim160(Flash_bwd_params &params, cudaStream_t stream) {
     constexpr static int Headdim = 160;
     int device;
@@ -327,4 +327,4 @@ void run_mha_bwd_hdim256(Flash_bwd_params &params, cudaStream_t stream) {
             }
         }
     });
-}
+}*/
