@@ -162,14 +162,24 @@ inline __device__ void compute_attn_1rowblock(const Params &params, const int bi
     Tensor tQsQ = gmem_thr_copy_QKV.partition_D(sQ);
     Tensor tVgQP = gmem_thr_copy_QKV.partition_S(gQP);
     Tensor tVsQP = gmem_thr_copy_QKV.partition_D(sQP);
-    cute::print("----------------");
-    cute::print("bidb", bidb);
-    cute::print("bidh", bidh);
-    cute::print("tidx", tidx);
-    cute::print("tQgQ.layout()", tQgQ.layout());
-    cute::print("tQsQ.layout()", tQsQ.layout());
-    cute::print("tVgQP.layout()", tVgQP.layout());
-    cute::print("tVsQP.layout()", tVsQP.layout());
+    if (cute::thread0()) {
+        printf("----------------\n");
+        printf("\ngridDim:"); print(gridDim);
+        printf("\nblockDim:"); print(blockDim);
+        printf("\nbidb:"); print(bidb);
+        printf("\nbidh:"); print(bidh);
+        printf("\ntidx:"); print(tidx);
+        printf("\nmQ.layout():"); print(mQ.layout());
+        printf("\nsQ.layout():"); print(sQ.layout());
+        printf("\nsK.layout():"); print(sK.layout());
+        printf("\nsQP.layout():"); print(sQP.layout());
+        printf("\nsV.layout():"); print(sV.layout());
+        printf("\ntQgQ.layout():"); print(tQgQ.layout());
+        printf("\ntQsQ.layout():"); print(tQsQ.layout());
+        printf("\ntVgQP.layout():"); print(tVgQP.layout());
+        printf("\ntVsQP.layout():"); print(tVsQP.layout());
+        printf("\n");
+    }
     Tensor tKgK = gmem_thr_copy_QKV.partition_S(gK);  // (KCPY, KCPY_N, KCPY_K, nblocksN)
     Tensor tKsK = gmem_thr_copy_QKV.partition_D(sK);
     Tensor tVgV = gmem_thr_copy_QKV.partition_S(gV);  // (VCPY, VCPY_N, VCPY_K, nblocksN)
