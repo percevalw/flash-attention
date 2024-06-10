@@ -138,7 +138,7 @@ struct Mask {
     template <bool Causal_mask=false, bool Is_even_MN=true, typename Engine, typename Layout>
     __forceinline__ __device__ void apply_mask(
             Tensor<Engine, Layout> &tensor_,
-            Tensor<Engine, Layout> &tCrQP,
+            // Tensor<Engine, Layout> &tCrQP,
             const int col_idx_offset_,
             const int row_idx_offset,
             const int warp_row_stride
@@ -200,9 +200,9 @@ struct Mask {
                                         tensor(make_coord(i, mi), make_coord(j, nj)) -= alibi_slope * abs(row_idx + max_seqlen_k - max_seqlen_q - col_idx);
                                     }
                                 }
-                                if constexpr (Has_rpe) {
-                                    tensor(make_coord(i, mi), make_coord(j, nj)) += tensor(make_coord(i, mi), make_coord(j, nj));
-                                }
+                                // if constexpr (Has_rpe) {
+                                //     tensor(make_coord(i, mi), make_coord(j, nj)) += tensor(make_coord(i, mi), make_coord(j, nj));
+                                // }
                                 if constexpr (Causal_mask) {
                                     if (col_idx >= col_idx_limit_right) {
                                         tensor(make_coord(i, mi), make_coord(j, nj)) = -INFINITY;

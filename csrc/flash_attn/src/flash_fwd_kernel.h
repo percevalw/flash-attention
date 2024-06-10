@@ -178,6 +178,7 @@ inline __device__ void compute_attn_1rowblock(const Params &params, const int bi
     typename Kernel_traits::TiledMma tiled_mma;
     auto thr_mma = tiled_mma.get_thread_slice(tidx);
     Tensor tSrQ  = thr_mma.partition_fragment_A(sQ);                           // (MMA,MMA_M,MMA_K)
+    Tensor tSrQP  = thr_mma.partition_fragment_A(sQP);                         // (MMA,MMA_M,MMA_K)
     Tensor tSrK  = thr_mma.partition_fragment_B(sK);                           // (MMA,MMA_N,MMA_K)
     Tensor tOrVt  = thr_mma.partition_fragment_B(sVtNoSwizzle);                // (MMA, MMA_K,MMA_N)
     Tensor tSgS  = thr_mma.partition_C(gP);
