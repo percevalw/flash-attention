@@ -107,7 +107,7 @@ __forceinline__ __device__ void apply_mask_causal_w_idx(
     }
 }
 
-template <bool Is_causal, bool Is_local, bool Has_alibi>
+template <bool Is_causal, bool Is_local, bool Has_alibi, bool Has_rpe=false>
 struct Mask {
 
     const int max_seqlen_k, max_seqlen_q;
@@ -124,22 +124,35 @@ struct Mask {
         , alibi_slope(!Has_alibi ? 0.0 : alibi_slope) {
     };
 
-    // Causal_mask: whether this particular iteration needs causal masking
+    /**
+     * @brief
+     * @tparam Causal_mask Whether this particular iteration needs causal masking
+     * @tparam Is_even_MN ???
+     *
+     * @param tensor_ The block tensor to apply the mask to
+     * @param tCrQP The QP tensor (RPE bias) to apply to the tensor
+     * @param col_idx_offset_ The column offset of the tensor
+     * @param row_idx_offset The row offset of the tensor
+     * @param warp_row_stride The stride of the rows
+     */
     template <bool Causal_mask=false, bool Is_even_MN=true, typename Engine, typename Layout>
-    __forceinline__ __device__ void apply_mask(Tensor<Engine, Layout> &tensor_,
-                                               const int col_idx_offset_,
-                                               const int row_idx_offset,
-                                               const int warp_row_stride) {
+    __forceinline__ __device__ void apply_mask(
+            Tensor<Engine, Layout> &tensor_,
+            Tensor<Engine, Layout> &tCrQP,
+            const int col_idx_offset_,
+            const int row_idx_offset,
+            const int warp_row_stride
+    ) {
         static_assert(!(Causal_mask && Is_local), "Cannot be both causal and local");
         static_assert(Layout::rank == 3, "Only support 3D Tensor");
         static_assert(decltype(size<0>(tensor_))::value == 4, "First dimension must be 4");
-        static constexpr bool Need_masking = Has_alibi || Causal_mask || Is_local || !Is_even_MN;
+        static constexpr bool Need_masking = Has_alibi || Has_rpe || Causal_mask || Is_local || !Is_even_MN;
         // if (cute::thread0()) { printf("Has_alibi = %d, Causal_mask=%d, Is_local=%d, Is_even_MN = %d, Need_masking = %d\n", Has_alibi, Causal_mask, Is_local, Is_even_MN, Need_masking); }
         if constexpr (Need_masking) {
             // Reshape tensor_ from (MMA=4, MMA_M, MMA_N) to (nrow=(2, MMA_M), ncol=(2, MMA_N))
             Tensor tensor = make_tensor(tensor_.data(), flash::convert_layout_acc_rowcol(tensor_.layout()));
             // Do we need both row and column indices, or just column incides?
-            static constexpr bool Col_idx_only = !(Has_alibi && !Is_causal) && !Is_local && !Causal_mask;
+            static constexpr bool Col_idx_only = !Has_rpe && !(Has_alibi && !Is_causal) && !Is_local && !Causal_mask;
             const int lane_id = threadIdx.x % 32;
             const int col_idx_offset = col_idx_offset_ + (lane_id % 4) * 2;
             if constexpr (Col_idx_only) {
@@ -162,17 +175,21 @@ struct Mask {
                     }
                 }
             } else {
+                // mi: 0..MMA_M = 0..kBlockM (?)
                 #pragma unroll
                 for (int mi = 0; mi < size<0, 1>(tensor); ++mi) {
                     const int row_idx_base = row_idx_offset + mi * warp_row_stride;
+                    // i: [0, 1] (?)
                     #pragma unroll
                     for (int i = 0; i < size<0, 0>(tensor); ++i) {
                         const int row_idx = row_idx_base + i * 8;
                         const int col_idx_limit_left = std::max(0, row_idx + max_seqlen_k - max_seqlen_q - window_size_left);
                         const int col_idx_limit_right = std::min(max_seqlen_k, row_idx + 1 + max_seqlen_k - max_seqlen_q + window_size_right);
+                        // nj: 0..MMA_N = 0..kBlockN (?)
                         #pragma unroll
                         for (int nj = 0; nj < size<1, 1>(tensor); ++nj) {
                             const int col_idx_base = col_idx_offset + nj * 8;
+                            // j: [0, 1] (?)
                             #pragma unroll
                             for (int j = 0; j < size<1, 0>(tensor); ++j) {
                                 const int col_idx = col_idx_base + j;
@@ -181,8 +198,10 @@ struct Mask {
                                         tensor(make_coord(i, mi), make_coord(j, nj)) += alibi_slope * col_idx;
                                     } else {
                                         tensor(make_coord(i, mi), make_coord(j, nj)) -= alibi_slope * abs(row_idx + max_seqlen_k - max_seqlen_q - col_idx);
-
                                     }
+                                }
+                                if constexpr (Has_rpe) {
+                                    tensor(make_coord(i, mi), make_coord(j, nj)) += tensor(make_coord(i, mi), make_coord(j, nj));
                                 }
                                 if constexpr (Causal_mask) {
                                     if (col_idx >= col_idx_limit_right) {
