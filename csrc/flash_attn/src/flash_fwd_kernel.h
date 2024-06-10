@@ -162,6 +162,14 @@ inline __device__ void compute_attn_1rowblock(const Params &params, const int bi
     Tensor tQsQ = gmem_thr_copy_QKV.partition_D(sQ);
     Tensor tVgQP = gmem_thr_copy_QKV.partition_S(gQP);
     Tensor tVsQP = gmem_thr_copy_QKV.partition_D(sQP);
+    cute::print("----------------");
+    cute::print("bidb", bidb);
+    cute::print("bidh", bidh);
+    cute::print("tidx", tidx);
+    cute::print("tQgQ.layout()", tQgQ.layout());
+    cute::print("tQsQ.layout()", tQsQ.layout());
+    cute::print("tVgQP.layout()", tVgQP.layout());
+    cute::print("tVsQP.layout()", tVsQP.layout());
     Tensor tKgK = gmem_thr_copy_QKV.partition_S(gK);  // (KCPY, KCPY_N, KCPY_K, nblocksN)
     Tensor tKsK = gmem_thr_copy_QKV.partition_D(sK);
     Tensor tVgV = gmem_thr_copy_QKV.partition_S(gV);  // (VCPY, VCPY_N, VCPY_K, nblocksN)
