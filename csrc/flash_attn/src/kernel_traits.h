@@ -84,6 +84,9 @@ struct Flash_fwd_kernel_traits : public Base {
     using SmemLayoutQ = decltype(tile_to_shape(
         SmemLayoutAtomQ{},
         Shape<Int<kBlockM>, Int<kHeadDim>>{}));
+    using SmemLayoutQP = decltype(tile_to_shape(
+        SmemLayoutAtomQ{},
+        Shape<Int<kBlockM>, Int<128>>{}));
 
     using SmemLayoutKV = decltype(tile_to_shape(
         SmemLayoutAtomQ{},
