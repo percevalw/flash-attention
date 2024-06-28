@@ -157,11 +157,15 @@ inline __device__ void compute_attn_1rowblock(const Params &params, const int bi
 
     typename Kernel_traits::GmemTiledCopyQKV gmem_tiled_copy_QKV;
     auto gmem_thr_copy_QKV = gmem_tiled_copy_QKV.get_thread_slice(tidx);
-
+    // tQgQ means "tiling pattern of Q applied to global mem Q"
     Tensor tQgQ = gmem_thr_copy_QKV.partition_S(gQ);
     Tensor tQsQ = gmem_thr_copy_QKV.partition_D(sQ);
-    Tensor tVgQP = gmem_thr_copy_QKV.partition_S(gQP);
-    Tensor tVsQP = gmem_thr_copy_QKV.partition_D(sQP);
+    Tensor tKgK = gmem_thr_copy_QKV.partition_S(gK);  // (KCPY, KCPY_N, KCPY_K, nblocksN)
+    Tensor tKsK = gmem_thr_copy_QKV.partition_D(sK);
+    Tensor tVgV = gmem_thr_copy_QKV.partition_S(gV);  // (VCPY, VCPY_N, VCPY_K, nblocksN)
+    Tensor tVsV = gmem_thr_copy_QKV.partition_D(sV);
+    Tensor tQPgQP = gmem_thr_copy_QKV.partition_S(gQP);  // (VCPY, VCPY_N, VCPY_K)
+    Tensor tQPsQP = gmem_thr_copy_QKV.partition_D(sQP);
     if (cute::thread0()) {
         printf("----------------\n");
         printf("\ngridDim:"); print(gridDim);
@@ -176,22 +180,22 @@ inline __device__ void compute_attn_1rowblock(const Params &params, const int bi
         printf("\nsV.layout():"); print(sV.layout());
         printf("\ntQgQ.layout():"); print(tQgQ.layout());
         printf("\ntQsQ.layout():"); print(tQsQ.layout());
-        printf("\ntVgQP.layout():"); print(tVgQP.layout());
-        printf("\ntVsQP.layout():"); print(tVsQP.layout());
+        printf("\ntQPgQP.layout():"); print(tQPgQP.layout());
+        printf("\ntQPsQP.layout():"); print(tQPsQP.layout());
         printf("\n");
     }
-    Tensor tKgK = gmem_thr_copy_QKV.partition_S(gK);  // (KCPY, KCPY_N, KCPY_K, nblocksN)
-    Tensor tKsK = gmem_thr_copy_QKV.partition_D(sK);
-    Tensor tVgV = gmem_thr_copy_QKV.partition_S(gV);  // (VCPY, VCPY_N, VCPY_K, nblocksN)
-    Tensor tVsV = gmem_thr_copy_QKV.partition_D(sV);
 
     typename Kernel_traits::TiledMma tiled_mma;
     auto thr_mma = tiled_mma.get_thread_slice(tidx);
     Tensor tSrQ  = thr_mma.partition_fragment_A(sQ);                           // (MMA,MMA_M,MMA_K)
-    Tensor tSrQP  = thr_mma.partition_fragment_A(sQP);                         // (MMA,MMA_M,MMA_K)
     Tensor tSrK  = thr_mma.partition_fragment_B(sK);                           // (MMA,MMA_N,MMA_K)
     Tensor tOrVt  = thr_mma.partition_fragment_B(sVtNoSwizzle);                // (MMA, MMA_K,MMA_N)
     Tensor tSgS  = thr_mma.partition_C(gP);
+    // TODO do we need to layout according to MMA ? We don't want to tile along the N_POS (K) mode
+
+    // Partition it the same as acc_s below
+    Tensor tSrQP  = thr_mma.partition_fragment_A(sQP);                         // (MMA,MMA_M,MMA_K)
+    // This allocates register space for a fragment of the final output
     Tensor acc_o = partition_fragment_C(tiled_mma, Shape<Int<kBlockM>, Int<kHeadDim>>{});  // MMA, MMA_M, MMA_K
 
     //
@@ -200,9 +204,11 @@ inline __device__ void compute_attn_1rowblock(const Params &params, const int bi
 
     auto smem_tiled_copy_Q = make_tiled_copy_A(typename Kernel_traits::SmemCopyAtom{}, tiled_mma);
     auto smem_thr_copy_Q = smem_tiled_copy_Q.get_thread_slice(tidx);
-    // if (cute::thread0()) {smem_thr_copy_Q.print_all();}
     Tensor tSsQ = smem_thr_copy_Q.partition_S(sQ);
-    // if (cute::thread0()) {print(tSsQ.layout()); printf("\n");}
+
+    auto smem_tiled_copy_QP = make_tiled_copy_A(typename Kernel_traits::SmemCopyAtom{}, tiled_mma);
+    auto smem_thr_copy_QP = smem_tiled_copy_QP.get_thread_slice(tidx);
+    Tensor tSsQP = smem_thr_copy_QP.partition_S(sQP);
 
     auto smem_tiled_copy_K = make_tiled_copy_B(typename Kernel_traits::SmemCopyAtom{}, tiled_mma);
     auto smem_thr_copy_K = smem_tiled_copy_K.get_thread_slice(tidx);
@@ -212,7 +218,6 @@ inline __device__ void compute_attn_1rowblock(const Params &params, const int bi
     auto smem_thr_copy_V = smem_tiled_copy_V.get_thread_slice(tidx);
     Tensor tOsVt = smem_thr_copy_V.partition_S(sVt);
 
-    //
     // PREDICATES
     //
 
@@ -223,18 +228,6 @@ inline __device__ void compute_attn_1rowblock(const Params &params, const int bi
     // Construct identity layout for sQ and sK
     Tensor cQ = make_identity_tensor(make_shape(size<0>(sQ), size<1>(sQ)));    // (BLK_M,BLK_K) -> (blk_m,blk_k)
     Tensor cKV = make_identity_tensor(make_shape(size<0>(sK), size<1>(sK)));    // (BLK_N,BLK_K) -> (blk_n,blk_k)
-    // Tensor tScQ = thr_mma.partition_A(cQ);                           // (MMA,MMA_M,MMA_K)
-    // if (cute::thread0()) {
-    //     print(tScQ.layout()); printf("\n");
-    //     for (int i = 0; i < size(tScQ); ++i) {
-    //         printf("%d ", get<0>(tScQ(i)));
-    //     }
-    //     printf("\n");
-    //     for (int i = 0; i < size(tScQ); ++i) {
-    //         printf("%d ", get<1>(tScQ(i)));
-    //     }
-    //     printf("\n");
-    // }
 
     // Repeat the partitioning with identity layouts
     Tensor tQcQ = gmem_thr_copy_QKV.partition_S(cQ);       // (ACPY,ACPY_M,ACPY_K) -> (blk_m,blk_k)
@@ -293,7 +286,7 @@ inline __device__ void compute_attn_1rowblock(const Params &params, const int bi
     flash::Softmax<2 * size<1>(acc_o)> softmax;
 
     const float alibi_slope = !Has_alibi || params.alibi_slopes_ptr == nullptr ? 0.0f : reinterpret_cast<float *>(params.alibi_slopes_ptr)[bidb * params.alibi_slopes_batch_stride + bidh] / params.scale_softmax;
-    flash::Mask<Is_causal, Is_local, Has_alibi> mask(
+    flash::Mask<Is_causal, Is_local, Has_alibi, true> mask(
         binfo.actual_seqlen_k,
         binfo.actual_seqlen_q,
         params.window_size_left,
@@ -314,6 +307,7 @@ inline __device__ void compute_attn_1rowblock(const Params &params, const int bi
         : ((Is_even_MN && Is_causal) ? cute::ceil_div(kBlockM, kBlockN) : cute::ceil_div(kBlockM, kBlockN) + 1);
     #pragma unroll
     for (int masking_step = 0; masking_step < n_masking_steps; ++masking_step, --n_block) {
+        // This must be allocated in the registers ?
         Tensor acc_s = partition_fragment_C(tiled_mma, Shape<Int<kBlockM>, Int<kBlockN>>{});  // (MMA=4, MMA_M, MMA_N)
         clear(acc_s);
         flash::cp_async_wait<0>();
@@ -337,7 +331,12 @@ inline __device__ void compute_attn_1rowblock(const Params &params, const int bi
         // if (cute::thread0()) { print(acc_s); }
 
         mask.template apply_mask<Is_causal, Is_even_MN>(
-            acc_s, n_block * kBlockN, m_block * kBlockM + (tidx / 32) * 16 + (tidx % 32) / 4, kNWarps * 16
+            acc_s,
+            tSsQP,
+            // tSrQP,
+            n_block * kBlockN,
+            m_block * kBlockM + (tidx / 32) * 16 + (tidx % 32) / 4,
+            kNWarps * 16
         );
 
         flash::cp_async_wait<0>();
@@ -374,9 +373,8 @@ inline __device__ void compute_attn_1rowblock(const Params &params, const int bi
         // Reshape rP from (MMA=4, MMA_M, MMA_N) to ((4, 2), MMA_M, MMA_N / 2)
         // if using m16n8k16 or (4, MMA_M, MMA_N) if using m16n8k8.
         Tensor tOrP = make_tensor(rP.data(), flash::convert_layout_acc_Aregs<Kernel_traits::TiledMma>(rP.layout()));
-        // if (cute::thread0()) { print(tOrP); }
+
         flash::gemm_rs(acc_o, tOrP, tOrVt, tOsVt, tiled_mma, smem_tiled_copy_V, smem_thr_copy_V);
-        // if (cute::thread0()) { print(scores); }
 
         // This check is at the end of the loop since we always have at least 1 iteration
         if (n_masking_steps > 1 && n_block <= n_block_min) {
@@ -401,6 +399,8 @@ inline __device__ void compute_attn_1rowblock(const Params &params, const int bi
 
         mask.template apply_mask</*Causal_mask=*/false>(
             acc_s, // tensor_
+            tSsQP,
+            // tSrQP,
             n_block * kBlockN, // col_idx_offset_
             m_block * kBlockM + (tidx / 32) * 16 + (tidx % 32) / 4, // row_idx_offset_
             kNWarps * 16 // warp_row_stride
@@ -636,6 +636,7 @@ inline __device__ void compute_attn_1rowblock_splitkv(const Params &params, cons
     Tensor sV = make_tensor(sK.data() + size(sK), typename Kernel_traits::SmemLayoutKV{});
     Tensor sVt = make_tensor(sV.data(), typename Kernel_traits::SmemLayoutVtransposed{});
     Tensor sVtNoSwizzle = make_tensor(sV.data(), typename Kernel_traits::SmemLayoutVtransposedNoSwizzle{});
+    Tensor sQP = make_tensor(sV.data() + size(sV), typename Kernel_traits::SmemLayoutQP{});
 
     typename Kernel_traits::GmemTiledCopyQKV gmem_tiled_copy_QKV;
     auto gmem_thr_copy_QKV = gmem_tiled_copy_QKV.get_thread_slice(tidx);
@@ -646,12 +647,16 @@ inline __device__ void compute_attn_1rowblock_splitkv(const Params &params, cons
     Tensor tKsK = gmem_thr_copy_QKV.partition_D(sK);
     Tensor tVgV = gmem_thr_copy_QKV.partition_S(gV);  // (VCPY, VCPY_N, VCPY_K)
     Tensor tVsV = gmem_thr_copy_QKV.partition_D(sV);
+    Tensor tQPgQP = gmem_thr_copy_QKV.partition_S(gQP);  // (VCPY, VCPY_N, VCPY_K)
+    Tensor tQPsQP = gmem_thr_copy_QKV.partition_D(sQP);
 
     typename Kernel_traits::TiledMma tiled_mma;
     auto thr_mma = tiled_mma.get_thread_slice(tidx);
     Tensor tSrQ  = thr_mma.partition_fragment_A(sQ);                           // (MMA,MMA_M,MMA_K)
     Tensor tSrK  = thr_mma.partition_fragment_B(sK);                           // (MMA,MMA_N,MMA_K)
     Tensor tOrVt  = thr_mma.partition_fragment_B(sVtNoSwizzle);                // (MMA, MMA_K,MMA_N)
+    // TODO do we need to layout according to MMA ? We don't want to tile along the N_POS (K) mode
+    Tensor tSrQP  = thr_mma.partition_fragment_A(sQP);                         // (MMA,MMA_M,MMA_K)
 
     Tensor acc_o = partition_fragment_C(tiled_mma, Shape<Int<kBlockM>, Int<kHeadDim>>{});  // MMA, MMA_M, MMA_K
 
@@ -662,6 +667,10 @@ inline __device__ void compute_attn_1rowblock_splitkv(const Params &params, cons
     auto smem_tiled_copy_Q = make_tiled_copy_A(typename Kernel_traits::SmemCopyAtom{}, tiled_mma);
     auto smem_thr_copy_Q = smem_tiled_copy_Q.get_thread_slice(tidx);
     Tensor tSsQ = smem_thr_copy_Q.partition_S(sQ);
+
+    auto smem_tiled_copy_QP = make_tiled_copy_A(typename Kernel_traits::SmemCopyAtom{}, tiled_mma);
+    auto smem_thr_copy_QP = smem_tiled_copy_QP.get_thread_slice(tidx);
+    Tensor tSsQP = smem_thr_copy_QP.partition_S(sQP);
 
     auto smem_tiled_copy_K = make_tiled_copy_B(typename Kernel_traits::SmemCopyAtom{}, tiled_mma);
     auto smem_thr_copy_K = smem_tiled_copy_K.get_thread_slice(tidx);
@@ -809,7 +818,8 @@ inline __device__ void compute_attn_1rowblock_splitkv(const Params &params, cons
         // We don't need to clear the sQ smem tiles since we'll only write out the valid outputs
         flash::copy<Is_even_MN, Is_even_K>(gmem_tiled_copy_QKV, tQgQ, tQsQ, tQcQ, tQpQ,
                                            binfo.actual_seqlen_q - m_block * kBlockM);
-    } else {
+    }
+    else {
         const index_t row_offset_cossin = (binfo.seqlen_k_cache + (Is_causal || Is_local ? m_block * kBlockM : 0)) * (params.rotary_dim / 2);
         // If not causal, all the queries get the same the cos/sin, taken at location seqlen_k_cache.
         // We do this by setting the row stride of gCos / gSin to 0.
@@ -848,6 +858,10 @@ inline __device__ void compute_attn_1rowblock_splitkv(const Params &params, cons
                                        binfo.actual_seqlen_k - n_block * kBlockN);
     cute::cp_async_fence();
 
+    // Read QP from gmem to smem
+    flash::copy<Is_even_MN, /*Is_even_K*/true>(gmem_tiled_copy_QKV, tQPgQP, tQPsQP, tQgQ, /*unused*/tQpQ,
+                                               binfo.actual_seqlen_q - m_block * kBlockM);
+
     // flash::cp_async_wait<0>();
     // __syncthreads();
     // if (tidx == 0 && blockIdx.y == 0 && blockIdx.z == 0) { print(tKsK); }
@@ -858,7 +872,7 @@ inline __device__ void compute_attn_1rowblock_splitkv(const Params &params, cons
     flash::Softmax<2 * size<1>(acc_o)> softmax;
 
     const float alibi_slope = !Has_alibi ? 0.0f : reinterpret_cast<float *>(params.alibi_slopes_ptr)[bidb * params.alibi_slopes_batch_stride + bidh] / params.scale_softmax;
-    flash::Mask<Is_causal, Is_local, Has_alibi> mask(binfo.actual_seqlen_k, binfo.actual_seqlen_q, params.window_size_left, params.window_size_right, alibi_slope);
+    flash::Mask<Is_causal, Is_local, Has_alibi, true> mask(binfo.actual_seqlen_k, binfo.actual_seqlen_q, params.window_size_left, params.window_size_right, alibi_slope);
 
     // For performance reason, we separate out two kinds of iterations:
     // those that need masking on S, and those that don't.
@@ -873,6 +887,7 @@ inline __device__ void compute_attn_1rowblock_splitkv(const Params &params, cons
         : ((Is_even_MN && Is_causal) ? cute::ceil_div(kBlockM, kBlockN) : cute::ceil_div(kBlockM, kBlockN) + 1);
     #pragma unroll
     for (int masking_step = 0; masking_step < n_masking_steps; ++masking_step, --n_block) {
+        // This must be allocated in the registers ?
         Tensor acc_s = partition_fragment_C(tiled_mma, Shape<Int<kBlockM>, Int<kBlockN>>{});  // (MMA=4, MMA_M, MMA_N)
         clear(acc_s);
         flash::cp_async_wait<0>();
@@ -905,7 +920,12 @@ inline __device__ void compute_attn_1rowblock_splitkv(const Params &params, cons
         // if (cute::thread0()) { print(acc_s); }
 
         mask.template apply_mask<Is_causal, Is_even_MN>(
-            acc_s, n_block * kBlockN, m_block * kBlockM + (tidx / 32) * 16 + (tidx % 32) / 4, kNWarps * 16
+            acc_s,
+            tSsQP,
+            // tSrQP,
+            n_block * kBlockN,
+            m_block * kBlockM + (tidx / 32) * 16 + (tidx % 32) / 4,
+            kNWarps * 16
         );
 
         flash::cp_async_wait<0>();
@@ -995,7 +1015,12 @@ inline __device__ void compute_attn_1rowblock_splitkv(const Params &params, cons
         }
 
         mask.template apply_mask</*Causal_mask=*/false>(
-            acc_s, n_block * kBlockN, m_block * kBlockM + (tidx / 32) * 16 + (tidx % 32) / 4, kNWarps * 16
+            acc_s,
+            tSsQP,
+            // tSrQP,
+            n_block * kBlockN,
+            m_block * kBlockM + (tidx / 32) * 16 + (tidx % 32) / 4,
+            kNWarps * 16
         );
         softmax.template softmax_rescale_o</*Is_first=*/false, /*Check_inf=*/Is_local>(acc_s, acc_o, params.scale_softmax_log2);
 
