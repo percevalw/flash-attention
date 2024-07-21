@@ -140,10 +140,10 @@ if not SKIP_CUDA_BUILD:
                 "csrc/flash_attn/src/flash_fwd_split_hdim128_fp16_sm80.cu",
             ],
             extra_compile_args={
-                "cxx": ["-O0", "-std=c++17"] + generator_flag,
+                "cxx": ["-O3", "-std=c++17"] + generator_flag,
                 "nvcc": append_nvcc_threads(
                     [
-                        "-O0",
+                        "-O3",
                         "-std=c++17",
                         "-U__CUDA_NO_HALF_OPERATORS__",
                         "-U__CUDA_NO_HALF_CONVERSIONS__",
@@ -153,8 +153,8 @@ if not SKIP_CUDA_BUILD:
                         "--expt-extended-lambda",
                         "--use_fast_math",
                         # "--ptxas-options=-v",
-                        "--ptxas-options=-O0",
-                        "-lineinfo",
+                        # "--ptxas-options=-O2",
+                        # "-lineinfo",
                         "-DFLASHATTENTION_DISABLE_BACKWARD",
                         "-DFLASHATTENTION_DISABLE_DROPOUT",
                         "-DFLASHATTENTION_DISABLE_ALIBI",
