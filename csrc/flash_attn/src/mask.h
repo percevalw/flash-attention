@@ -143,10 +143,6 @@ struct Mask {
             const int row_idx_offset,
             const int warp_row_stride
     ) {
-        if (blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && threadIdx.x == 0) {
-            printf("sQP tensor");
-            print_tensor(sQP);
-        }
         static_assert(!(Causal_mask && Is_local), "Cannot be both causal and local");
         static_assert(LayoutC::rank == 3, "Only support 3D Tensor");
         static_assert(decltype(size<0>(tensor_))::value == 4, "First dimension must be 4");
@@ -212,13 +208,16 @@ struct Mask {
                                     if (blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && threadIdx.x == 0) {
                                         const int block_col_idx = col_idx - col_idx_offset_;
                                         const int block_row_idx = row_idx - row_idx_offset;
-                                        printf("sQP layout"); print(sQP.layout());
                                         print(
-                                          "\nCOL IDX %d, ROW IDX = %d, i = %d, j = %d, mi = %d, nj = %d, block_col_idx = %d, block_row_idx = %d => sQP = %f, S = %f\n",
+                                          "\nCOL IDX %d, ROW IDX = %d, i = %d, j = %d, mi = %d, nj = %d, block_col_idx = %d, block_row_idx = %d => S = %f\n",
                                           col_idx, row_idx, i, j, mi, nj, block_col_idx, block_row_idx,
                                           sQP(block_row_idx, 0),
                                           tensor(make_coord(i, mi), make_coord(j, nj))
                                         );
+                                        printf("sQP val: ");
+                                        print(sQP.layout());
+                                        pretty_print(sQP(block_row_idx, 0));
+                                        pretty_print(sQP(0, 0));
                                     }
                                     tensor(make_coord(i, mi), make_coord(j, nj)) += 0; // tSrQP_(make_coord(i, mi), diff_idx);
 
