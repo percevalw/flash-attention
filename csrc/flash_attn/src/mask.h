@@ -135,11 +135,11 @@ struct Mask {
      * @param row_idx_offset The row offset of the tensor
      * @param warp_row_stride The stride of the rows
      */
-    template <bool Causal_mask=false, bool Is_even_MN=true, typename Engine, typename LayoutA, typename LayoutC>
+    template <bool Causal_mask=false, bool Is_even_MN=true, typename Engine, typename LayoutC, typename TensorQP>
     __forceinline__ __device__ void apply_mask(
             Tensor<Engine, LayoutC> &tensor_, // (MMA=4, MMA_M, MMA_N)
-            Tensor<Engine, LayoutA> &tSrQP_,   // (MMA=4, MMA_M, N_POS)
-            const int col_idx_offset_,
+            TensorQP &sQP,   // (kBlockM, kHeadDim)
+            const int col_idx_offset_,   // = n_block * kBlockN
             const int row_idx_offset,
             const int warp_row_stride
     ) {
@@ -152,10 +152,11 @@ struct Mask {
             // Reshape tensor_ from (MMA=4, MMA_M, MMA_N) to (nrow=(2, MMA_M), ncol=(2, MMA_N))
             Tensor tensor = make_tensor(tensor_.data(), flash::convert_layout_acc_rowcol(tensor_.layout()));
             // Reshape tSrQP from (MMA=4, MMA_M, N_POS) to (nrow=(2, MMA_M), ncol=N_POS)
-            Tensor tSrQP = make_tensor(tSrQP_.data(), flash::convert_layout_acc_rowcol(tSrQP_.layout()));
+            // Tensor tSrQP = make_tensor(tSrQP_.data(), flash::convert_layout_acc_rowcol(tSrQP_.layout()));
             // Do we need both row and column indices, or just column incides?
             static constexpr bool Col_idx_only = !Has_rpe && !(Has_alibi && !Is_causal) && !Is_local && !Causal_mask;
-            const int lane_id = threadIdx.x % 32;
+            const int lane_id = threadIdx.x % 32; // ranges from 0 to kBlockM = 128
+            // col_idx_offset = n_block * kBlockN + (threadIdx.x % 4) * 2
             const int col_idx_offset = col_idx_offset_ + (lane_id % 4) * 2;
             if constexpr (Col_idx_only) {
                 #pragma unroll
@@ -204,7 +205,20 @@ struct Mask {
                                 }
                                 if constexpr (Has_rpe) {
                                     const int diff_idx = std::min(127, std::max(0, col_idx - row_idx + 128));
-                                    tensor(make_coord(i, mi), make_coord(j, nj)) += tSrQP(make_coord(i, mi), diff_idx);
+                                    if (blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && threadIdx.x == 0) {
+                                        const int block_col_idx = col_idx - col_idx_offset_;
+                                        const int block_row_idx = row_idx - row_idx_offset;
+                                        printf("sQP layout"); print(sQP.layout());
+                                        printf("sQP tensor"); print_tensor(sQP);
+                                        print(
+                                          "\nCOL IDX %d, ROW IDX = %d, i = %d, j = %d, mi = %d, nj = %d, block_col_idx = %d, block_row_idx = %d => sQP = %f, S = %f\n",
+                                          col_idx, row_idx, i, j, mi, nj, block_col_idx, block_row_idx,
+                                          sQP(block_row_idx, 0),
+                                          tensor(make_coord(i, mi), make_coord(j, nj))
+                                        );
+                                    }
+                                    tensor(make_coord(i, mi), make_coord(j, nj)) += 0; // tSrQP_(make_coord(i, mi), diff_idx);
+
                                 }
                                 if constexpr (Causal_mask) {
                                     if (col_idx >= col_idx_limit_right) {

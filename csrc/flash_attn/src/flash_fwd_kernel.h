@@ -23,8 +23,27 @@ namespace flash {
 using namespace cute;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
+template <typename T, typename U>
+struct TypeDisplayer; // Intentionally not defined
 
-template<typename Kernel_traits, bool Is_dropout, bool Is_causal, bool Is_local, bool Has_alibi, bool Is_even_MN, bool Is_even_K, bool Return_softmax, typename Params>
+// Step 1: Define the TypeWrapper structure
+template<int ID, typename T>
+struct TypeWrapper_____ {};
+
+template<typename... T>
+struct AlwaysFalse : std::false_type {};
+
+template<typename... T>
+void revealType() {
+    // Note: This will still cause a compilation error, but you're attempting to
+    // make the error message informative regarding the type of T.
+    static_assert(AlwaysFalse<T...>::value, "Revealing type, check the error message for details.");
+}
+
+
+template<
+    typename Kernel_traits, bool Is_dropout, bool Is_causal, bool Is_local, bool Has_alibi, bool Is_even_MN, bool Is_even_K, bool Return_softmax, typename Params
+>
 inline __device__ void compute_attn_1rowblock(const Params &params, const int bidb, const int bidh, const int m_block) {
 
     using Element = typename Kernel_traits::Element;
@@ -125,7 +144,7 @@ inline __device__ void compute_attn_1rowblock(const Params &params, const int bi
                             make_shape(binfo.actual_seqlen_q, params.h, params.num_pos),
                             make_stride(params.qp_row_stride, params.qp_head_stride, _1{}));
     Tensor gQP = local_tile(mQP(_, bidh, _),
-                            make_shape(kBlockM, params.num_pos),
+                            Shape<Int<kBlockM>, Int<128>>{},
                             // Shape<Int<kBlockM>, Int<kHeadDim>>{},
                             make_coord(m_block, 0));  // (kBlockM, num_pos)
     Tensor mK = make_tensor(make_gmem_ptr(reinterpret_cast<Element*>(params.k_ptr)
@@ -166,24 +185,6 @@ inline __device__ void compute_attn_1rowblock(const Params &params, const int bi
     Tensor tVsV = gmem_thr_copy_QKV.partition_D(sV);
     Tensor tQPgQP = gmem_thr_copy_QKV.partition_S(gQP);  // (VCPY, VCPY_N, VCPY_K)
     Tensor tQPsQP = gmem_thr_copy_QKV.partition_D(sQP);
-    if (cute::thread0()) {
-        printf("----------------\n");
-        printf("\ngridDim:"); print(gridDim);
-        printf("\nblockDim:"); print(blockDim);
-        printf("\nbidb:"); print(bidb);
-        printf("\nbidh:"); print(bidh);
-        printf("\ntidx:"); print(tidx);
-        printf("\nmQ.layout():"); print(mQ.layout());
-        printf("\nsQ.layout():"); print(sQ.layout());
-        printf("\nsK.layout():"); print(sK.layout());
-        printf("\nsQP.layout():"); print(sQP.layout());
-        printf("\nsV.layout():"); print(sV.layout());
-        printf("\ntQgQ.layout():"); print(tQgQ.layout());
-        printf("\ntQsQ.layout():"); print(tQsQ.layout());
-        printf("\ntQPgQP.layout():"); print(tQPgQP.layout());
-        printf("\ntQPsQP.layout():"); print(tQPsQP.layout());
-        printf("\n");
-    }
 
     typename Kernel_traits::TiledMma tiled_mma;
     auto thr_mma = tiled_mma.get_thread_slice(tidx);
@@ -194,9 +195,49 @@ inline __device__ void compute_attn_1rowblock(const Params &params, const int bi
     // TODO do we need to layout according to MMA ? We don't want to tile along the N_POS (K) mode
 
     // Partition it the same as acc_s below
-    Tensor tSrQP  = thr_mma.partition_fragment_A(sQP);                         // (MMA,MMA_M,MMA_K)
+    Tensor tSrQP = thr_mma.partition_fragment_A(sQP);
+
     // This allocates register space for a fragment of the final output
     Tensor acc_o = partition_fragment_C(tiled_mma, Shape<Int<kBlockM>, Int<kHeadDim>>{});  // MMA, MMA_M, MMA_K
+
+    if (blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && tidx == 0) {
+        printf("----------------\n");
+        printf("\ngridDim:"); print(gridDim);
+        printf("\nblockDim:"); print(blockDim);
+        printf("\nbidb:"); print(bidb);
+        printf("\nbidh:"); print(bidh);
+        printf("\ntidx:"); print(tidx);
+        printf("\nmQ.layout():"); print(mQ.layout());
+        printf("\nmQP.layout():"); print(mQP.layout());
+        printf("\ngQ.layout():"); print(gQ.layout());
+        printf("\ngQP.layout():"); print(gQP.layout());
+        printf("\nsQ.layout():"); print(sQ.layout());
+        printf("\nsQP.layout():"); print(sQP.layout());
+        printf("\nsK.layout():"); print(sK.layout());
+        printf("\nsV.layout():"); print(sV.layout());
+        printf("\ntQgQ.layout():"); print(tQgQ.layout());
+        printf("\ntQsQ.layout():"); print(tQsQ.layout());
+        printf("\ntQPgQP.layout():"); print(tQPgQP.layout());
+        printf("\ntQPsQP.layout():"); print(tQPsQP.layout());
+        printf("\ntSrQP.layout():"); print(tSrQP.layout());
+        printf("\nSmemLayoutAtomQ:"); print(typename Kernel_traits::SmemLayoutAtomQ{});
+        printf("\nShape<Int<kBlockM>, Int<kHeadDim>> => ... ="); print(Shape<Int<kBlockM>, Int<kHeadDim>>{});
+        printf("\ntile_to_shape($1, $2) = SmemLayoutQ:"); print(typename Kernel_traits::SmemLayoutQ{});
+        printf("\nSmemLayoutAtomQP:"); print(typename Kernel_traits::SmemLayoutAtomQP{});
+        printf("\nShape<Int<kBlockM>, Int<kHeadDim>> => ... ="); print(Shape<Int<kBlockM>, Int<kHeadDim>>{});
+        printf("\ntile_to_shape($1, $2) = SmemLayoutQP:"); print(typename Kernel_traits::SmemLayoutQP{});
+        printf("\n");
+    }
+    // revealType<
+    //     TypeWrapper_____<1, decltype(tSrQP.shape())>,
+    //     TypeWrapper_____<2, decltype(tSrQ.shape())>,
+    //     TypeWrapper_____<3, decltype(acc_o.shape())>,
+    //     TypeWrapper_____<4, decltype(tSgS.shape())>
+    // >();
+
+    if (blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && tidx == 0) {
+        printf("\ntSrQP.shape():"); print(tSrQP.shape());
+    }
 
     //
     // Copy Atom retiling
@@ -281,6 +322,14 @@ inline __device__ void compute_attn_1rowblock(const Params &params, const int bi
         cute::copy(smem_tiled_copy_Q, tSsQ, tSrQ_copy_view);
     }
 
+    flash::copy<Is_even_MN, /*Is_even_K*/true>(gmem_tiled_copy_QKV, tQPgQP, tQPsQP, /*unused*/ tQcQ, /*unused*/tQpQ,
+                                               binfo.actual_seqlen_q - m_block * kBlockM);
+    cute::cp_async_fence();
+
+    if (blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && tidx == 0) {
+        printf("sQP"); print_tensor(sQP);
+    }
+
     clear(acc_o);
 
     flash::Softmax<2 * size<1>(acc_o)> softmax;
@@ -313,6 +362,12 @@ inline __device__ void compute_attn_1rowblock(const Params &params, const int bi
         flash::cp_async_wait<0>();
         __syncthreads();
 
+        if (blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && tidx == 0) {
+            printf("\n\nmasking_step: %d", masking_step);
+            printf("\nShape<Int<kBlockM>, Int<kBlockN>>{}"); print(Shape<Int<kBlockM>, Int<kBlockN>>{});
+            printf("\nacc_s.layout():"); print(acc_s.layout());
+        }
+
         // Advance gV
         if (masking_step > 0) {
             flash::copy</*Is_even_MN=*/true, Is_even_K>(gmem_tiled_copy_QKV, tVgV(_, _, _, n_block), tVsV, tKVcKV, tKVpKV);
@@ -332,8 +387,8 @@ inline __device__ void compute_attn_1rowblock(const Params &params, const int bi
 
         mask.template apply_mask<Is_causal, Is_even_MN>(
             acc_s,
-            tSsQP,
-            // tSrQP,
+            sQP,
+            // sQP,
             n_block * kBlockN,
             m_block * kBlockM + (tidx / 32) * 16 + (tidx % 32) / 4,
             kNWarps * 16
@@ -399,8 +454,8 @@ inline __device__ void compute_attn_1rowblock(const Params &params, const int bi
 
         mask.template apply_mask</*Causal_mask=*/false>(
             acc_s, // tensor_
-            tSsQP,
-            // tSrQP,
+            sQP,
+            // sQP,
             n_block * kBlockN, // col_idx_offset_
             m_block * kBlockM + (tidx / 32) * 16 + (tidx % 32) / 4, // row_idx_offset_
             kNWarps * 16 // warp_row_stride
@@ -612,14 +667,16 @@ inline __device__ void compute_attn_1rowblock_splitkv(const Params &params, cons
                                           + binfo.q_offset(params.q_batch_stride, params.q_row_stride, bidb)),
                             make_shape(binfo.actual_seqlen_q, params.h, params.d),
                             make_stride(params.q_row_stride, params.q_head_stride, _1{}));
-    Tensor gQ = local_tile(mQ(_, bidh, _), Shape<Int<kBlockM>, Int<kHeadDim>>{},
+    Tensor gQ = local_tile(mQ(_, bidh, _),
+                           Shape<Int<kBlockM>, Int<kHeadDim>>{},
                            make_coord(m_block, 0));  // (kBlockM, kHeadDim)
     Tensor mQP = make_tensor(make_gmem_ptr(reinterpret_cast<Element*>(params.qp_ptr)
                                           + binfo.q_offset(params.qp_batch_stride, params.qp_row_stride, bidb)),
                             make_shape(binfo.actual_seqlen_q, params.h, params.num_pos),
                             make_stride(params.qp_row_stride, params.qp_head_stride, _1{}));
     Tensor gQP = local_tile(mQP(_, bidh, _),
-                            make_shape(kBlockM, params.num_pos),
+                            // make_shape(kBlockM, Int<128>{}),
+                            Shape<Int<kBlockM>, Int<128>>{},
                             // Shape<Int<kBlockM>, Int<kHeadDim>>{},
                             make_coord(m_block, 0));  // (kBlockM, num_pos)
     Tensor gK = make_tensor(make_gmem_ptr(reinterpret_cast<Element *>(params.k_ptr) + row_offset_k),
@@ -859,7 +916,9 @@ inline __device__ void compute_attn_1rowblock_splitkv(const Params &params, cons
     cute::cp_async_fence();
 
     // Read QP from gmem to smem
-    flash::copy<Is_even_MN, /*Is_even_K*/true>(gmem_tiled_copy_QKV, tQPgQP, tQPsQP, tQgQ, /*unused*/tQpQ,
+    CUTE_STATIC_ASSERT_V(size<1>(tQPgQP) == size<1>(tQPsQP));
+
+    flash::copy<Is_even_MN, /*Is_even_K*/true>(gmem_tiled_copy_QKV, tQPgQP, tQPsQP, /*unused*/ tQcQ, /*unused*/tQpQ,
                                                binfo.actual_seqlen_q - m_block * kBlockM);
 
     // flash::cp_async_wait<0>();
@@ -921,7 +980,7 @@ inline __device__ void compute_attn_1rowblock_splitkv(const Params &params, cons
 
         mask.template apply_mask<Is_causal, Is_even_MN>(
             acc_s,
-            tSsQP,
+            sQP,
             // tSrQP,
             n_block * kBlockN,
             m_block * kBlockM + (tidx / 32) * 16 + (tidx % 32) / 4,
@@ -1016,7 +1075,7 @@ inline __device__ void compute_attn_1rowblock_splitkv(const Params &params, cons
 
         mask.template apply_mask</*Causal_mask=*/false>(
             acc_s,
-            tSsQP,
+            sQP,
             // tSrQP,
             n_block * kBlockN,
             m_block * kBlockM + (tidx / 32) * 16 + (tidx % 32) / 4,

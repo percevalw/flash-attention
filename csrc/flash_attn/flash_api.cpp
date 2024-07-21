@@ -59,9 +59,11 @@ void set_params_fprop(Flash_fwd_params &params,
     params.qp_ptr = qp.data_ptr();
     // All stride are in elements, not bytes.
     params.q_row_stride = q.stride(-3);
+    params.qp_row_stride = qp.stride(-3);
     params.k_row_stride = k.stride(-3);
     params.v_row_stride = v.stride(-3);
     params.q_head_stride = q.stride(-2);
+    params.qp_head_stride = qp.stride(-2);
     params.k_head_stride = k.stride(-2);
     params.v_head_stride = v.stride(-2);
     params.o_ptr = out.data_ptr();
@@ -70,11 +72,13 @@ void set_params_fprop(Flash_fwd_params &params,
 
     if (cu_seqlens_q_d == nullptr) {
         params.q_batch_stride = q.stride(0);
+        params.qp_batch_stride = qp.stride(0);
         params.k_batch_stride = k.stride(0);
         params.v_batch_stride = v.stride(0);
         params.o_batch_stride = out.stride(0);
         if (seqlenq_ngroups_swapped) {
              params.q_batch_stride *= seqlen_q;
+             params.qp_batch_stride *= seqlen_q;
              params.o_batch_stride *= seqlen_q;
         }
     }
