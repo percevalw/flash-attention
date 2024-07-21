@@ -200,7 +200,7 @@ inline __device__ void compute_attn_1rowblock(const Params &params, const int bi
     // This allocates register space for a fragment of the final output
     Tensor acc_o = partition_fragment_C(tiled_mma, Shape<Int<kBlockM>, Int<kHeadDim>>{});  // MMA, MMA_M, MMA_K
 
-    if (blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && tidx == 0) {
+    /*if (blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && tidx == 0) {
         printf("----------------\n");
         printf("\ngridDim:"); print(gridDim);
         printf("\nblockDim:"); print(blockDim);
@@ -226,18 +226,15 @@ inline __device__ void compute_attn_1rowblock(const Params &params, const int bi
         printf("\nSmemLayoutAtomQP:"); print(typename Kernel_traits::SmemLayoutAtomQP{});
         printf("\nShape<Int<kBlockM>, Int<kHeadDim>> => ... ="); print(Shape<Int<kBlockM>, Int<kHeadDim>>{});
         printf("\ntile_to_shape($1, $2) = SmemLayoutQP:"); print(typename Kernel_traits::SmemLayoutQP{});
+        printf("\ntSrQP.shape():"); print(tSrQP.shape());
         printf("\n");
-    }
+    }*/
     // revealType<
     //     TypeWrapper_____<1, decltype(tSrQP.shape())>,
     //     TypeWrapper_____<2, decltype(tSrQ.shape())>,
     //     TypeWrapper_____<3, decltype(acc_o.shape())>,
     //     TypeWrapper_____<4, decltype(tSgS.shape())>
     // >();
-
-    if (blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && tidx == 0) {
-        printf("\ntSrQP.shape():"); print(tSrQP.shape());
-    }
 
     //
     // Copy Atom retiling
@@ -326,10 +323,6 @@ inline __device__ void compute_attn_1rowblock(const Params &params, const int bi
                                                binfo.actual_seqlen_q - m_block * kBlockM);
     cute::cp_async_fence();
 
-    if (blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && tidx == 0) {
-        printf("sQP"); print_tensor(sQP);
-    }
-
     clear(acc_o);
 
     flash::Softmax<2 * size<1>(acc_o)> softmax;
@@ -362,11 +355,11 @@ inline __device__ void compute_attn_1rowblock(const Params &params, const int bi
         flash::cp_async_wait<0>();
         __syncthreads();
 
-        if (blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && tidx == 0) {
+        /*if (blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && tidx == 0) {
             printf("\n\nmasking_step: %d", masking_step);
             printf("\nShape<Int<kBlockM>, Int<kBlockN>>{}"); print(Shape<Int<kBlockM>, Int<kBlockN>>{});
             printf("\nacc_s.layout():"); print(acc_s.layout());
-        }
+        }*/
 
         // Advance gV
         if (masking_step > 0) {

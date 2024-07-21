@@ -204,22 +204,18 @@ struct Mask {
                                     }
                                 }
                                 if constexpr (Has_rpe) {
-                                    const int diff_idx = std::min(127, std::max(0, col_idx - row_idx + 128));
-                                    if (blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && threadIdx.x == 0) {
-                                        const int block_col_idx = col_idx - col_idx_offset_;
-                                        const int block_row_idx = row_idx - row_idx_offset;
+                                    const int diff_idx = std::min(127, std::max(0, col_idx - row_idx + 64));
+                                    const int block_col_idx = col_idx - col_idx_offset_;
+                                    const int block_row_idx = row_idx - row_idx_offset;
+                                    /*if (blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && threadIdx.x == 0) {
                                         print(
-                                          "\nCOL IDX %d, ROW IDX = %d, i = %d, j = %d, mi = %d, nj = %d, block_col_idx = %d, block_row_idx = %d => S = %f\n",
-                                          col_idx, row_idx, i, j, mi, nj, block_col_idx, block_row_idx,
-                                          sQP(block_row_idx, 0),
-                                          tensor(make_coord(i, mi), make_coord(j, nj))
-                                        );
-                                        printf("sQP val: ");
-                                        print(sQP.layout());
-                                        pretty_print(sQP(block_row_idx, 0));
-                                        pretty_print(sQP(0, 0));
-                                    }
-                                    tensor(make_coord(i, mi), make_coord(j, nj)) += 0; // tSrQP_(make_coord(i, mi), diff_idx);
+                                          "\nBLOCK COL %d, BLOCK ROW = %d, COL %d, ROW %d => S = %f, DIFF IDX=%d, QP = \n",
+                                          block_col_idx, block_row_idx, col_idx, row_idx,
+                                          tensor(make_coord(i, mi), make_coord(j, nj)),
+                                          diff_idx
+                                        ); print(sQP(block_row_idx, diff_idx));
+                                    }*/
+                                    tensor(make_coord(i, mi), make_coord(j, nj)) += sQP(block_row_idx, diff_idx); // tSrQP_(make_coord(i, mi), diff_idx);
 
                                 }
                                 if constexpr (Causal_mask) {
