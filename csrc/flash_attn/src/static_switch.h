@@ -46,7 +46,7 @@
   #define ALIBI_SWITCH BOOL_SWITCH
 #endif
 
-#ifdef FLASHATTENTION_DISABLE_ALIBI
+#ifdef FLASHATTENTION_DISABLE_RPE
   #define RPE_SWITCH(COND, CONST_NAME, ...)   \
   [&] {                                         \
     constexpr static bool CONST_NAME = false;   \
