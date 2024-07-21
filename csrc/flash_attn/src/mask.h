@@ -107,7 +107,7 @@ __forceinline__ __device__ void apply_mask_causal_w_idx(
     }
 }
 
-template <bool Is_causal, bool Is_local, bool Has_alibi, bool Has_rpe=false>
+template <bool Is_causal, bool Is_local, bool Has_alibi, bool Has_RPE=false>
 struct Mask {
 
     const int max_seqlen_k, max_seqlen_q;
@@ -146,7 +146,7 @@ struct Mask {
         static_assert(!(Causal_mask && Is_local), "Cannot be both causal and local");
         static_assert(LayoutC::rank == 3, "Only support 3D Tensor");
         static_assert(decltype(size<0>(tensor_))::value == 4, "First dimension must be 4");
-        static constexpr bool Need_masking = Has_alibi || Has_rpe || Causal_mask || Is_local || !Is_even_MN;
+        static constexpr bool Need_masking = Has_alibi || Has_RPE || Causal_mask || Is_local || !Is_even_MN;
         // if (cute::thread0()) { printf("Has_alibi = %d, Causal_mask=%d, Is_local=%d, Is_even_MN = %d, Need_masking = %d\n", Has_alibi, Causal_mask, Is_local, Is_even_MN, Need_masking); }
         if constexpr (Need_masking) {
             // Reshape tensor_ from (MMA=4, MMA_M, MMA_N) to (nrow=(2, MMA_M), ncol=(2, MMA_N))
@@ -154,7 +154,7 @@ struct Mask {
             // Reshape tSrQP from (MMA=4, MMA_M, N_POS) to (nrow=(2, MMA_M), ncol=N_POS)
             // Tensor tSrQP = make_tensor(tSrQP_.data(), flash::convert_layout_acc_rowcol(tSrQP_.layout()));
             // Do we need both row and column indices, or just column incides?
-            static constexpr bool Col_idx_only = !Has_rpe && !(Has_alibi && !Is_causal) && !Is_local && !Causal_mask;
+            static constexpr bool Col_idx_only = !Has_RPE && !(Has_alibi && !Is_causal) && !Is_local && !Causal_mask;
             const int lane_id = threadIdx.x % 32; // ranges from 0 to kBlockM = 128
             // col_idx_offset = n_block * kBlockN + (threadIdx.x % 4) * 2
             const int col_idx_offset = col_idx_offset_ + (lane_id % 4) * 2;
@@ -203,7 +203,7 @@ struct Mask {
                                         tensor(make_coord(i, mi), make_coord(j, nj)) -= alibi_slope * abs((max_seqlen_k - col_idx) - (max_seqlen_q - row_idx));
                                     }
                                 }
-                                if constexpr (Has_rpe) {
+                                if constexpr (Has_RPE) {
                                     const int diff_idx = std::min(127, std::max(0, col_idx - row_idx + 64));
                                     const int block_col_idx = col_idx - col_idx_offset_;
                                     const int block_row_idx = row_idx - row_idx_offset;

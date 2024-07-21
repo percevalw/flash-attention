@@ -34,7 +34,7 @@ void set_params_fprop(Flash_fwd_params &params,
                       const at::Tensor q,
                       const at::Tensor k,
                       const at::Tensor v,
-                      const at::Tensor qp,
+                      const c10::optional<at::Tensor> qp,
                       at::Tensor out,
                       void *cu_seqlens_q_d,
                       void *cu_seqlens_k_d,
@@ -56,14 +56,11 @@ void set_params_fprop(Flash_fwd_params &params,
     params.q_ptr = q.data_ptr();
     params.k_ptr = k.data_ptr();
     params.v_ptr = v.data_ptr();
-    params.qp_ptr = qp.data_ptr();
     // All stride are in elements, not bytes.
     params.q_row_stride = q.stride(-3);
-    params.qp_row_stride = qp.stride(-3);
     params.k_row_stride = k.stride(-3);
     params.v_row_stride = v.stride(-3);
     params.q_head_stride = q.stride(-2);
-    params.qp_head_stride = qp.stride(-2);
     params.k_head_stride = k.stride(-2);
     params.v_head_stride = v.stride(-2);
     params.o_ptr = out.data_ptr();
@@ -72,14 +69,27 @@ void set_params_fprop(Flash_fwd_params &params,
 
     if (cu_seqlens_q_d == nullptr) {
         params.q_batch_stride = q.stride(0);
-        params.qp_batch_stride = qp.stride(0);
         params.k_batch_stride = k.stride(0);
         params.v_batch_stride = v.stride(0);
         params.o_batch_stride = out.stride(0);
         if (seqlenq_ngroups_swapped) {
              params.q_batch_stride *= seqlen_q;
-             params.qp_batch_stride *= seqlen_q;
+             if (num_pos > 0) {
+                 params.qp_batch_stride *= seqlen_q;
+             }
              params.o_batch_stride *= seqlen_q;
+        }
+    }
+
+    if (qp.has_value()) {
+        params.qp_ptr = qp.value().data_ptr();
+        params.qp_row_stride = qp.value().stride(-3);
+        params.qp_head_stride = qp.value().stride(-2);
+        if (cu_seqlens_q_d == nullptr) {
+            params.qp_batch_stride = qp.value().stride(0);
+            if (seqlenq_ngroups_swapped) {
+                params.qp_batch_stride *= seqlen_q;
+            }
         }
     }
 
@@ -328,7 +338,7 @@ std::vector<at::Tensor>
 mha_fwd(at::Tensor &q,         // batch_size x seqlen_q x num_heads x head_size
         const at::Tensor &k,         // batch_size x seqlen_k x num_heads_k x head_size
         const at::Tensor &v,         // batch_size x seqlen_k x num_heads_k x head_size
-        const at::Tensor &qp,         // batch_size x seqlen_k x num_heads_k x num_pos
+        const c10::optional<const at::Tensor> &qp,         // batch_size x seqlen_k x num_heads_k x num_pos
         c10::optional<at::Tensor> &out_,             // batch_size x seqlen_q x num_heads x head_size
         c10::optional<at::Tensor> &alibi_slopes_, // num_heads or batch_size x num_heads
         const float p_dropout,
@@ -370,7 +380,7 @@ mha_fwd(at::Tensor &q,         // batch_size x seqlen_q x num_heads x head_size
     const int head_size_og = sizes[3];
     const int seqlen_k = k.size(1);
     const int num_heads_k = k.size(2);
-    const int num_pos = qp.size(3);
+    const int num_pos = qp.has_value() ? qp.value().size(3) : 0;
     TORCH_CHECK(batch_size > 0, "batch size must be postive");
     TORCH_CHECK(head_size_og <= 256, "FlashAttention forward only supports head dimension at most 256");
     TORCH_CHECK(num_heads % num_heads_k == 0, "Number of heads in key/value must divide number of heads in query");
@@ -396,12 +406,15 @@ mha_fwd(at::Tensor &q,         // batch_size x seqlen_q x num_heads x head_size
     CHECK_SHAPE(k, batch_size, seqlen_k, num_heads_k, head_size_og);
     CHECK_SHAPE(v, batch_size, seqlen_k, num_heads_k, head_size_og);
 
-    at::Tensor q_padded, k_padded, v_padded, qp_padded;
+    at::Tensor q_padded, k_padded, v_padded;
+    c10::optional<at::Tensor> qp_padded;
     if (head_size_og % 8 != 0) {
         q_padded = torch::nn::functional::pad(q, torch::nn::functional::PadFuncOptions({0, 8 - head_size_og % 8}));
         k_padded = torch::nn::functional::pad(k, torch::nn::functional::PadFuncOptions({0, 8 - head_size_og % 8}));
         v_padded = torch::nn::functional::pad(v, torch::nn::functional::PadFuncOptions({0, 8 - head_size_og % 8}));
-        qp_padded = torch::nn::functional::pad(qp, torch::nn::functional::PadFuncOptions({0, 8 - head_size_og % 8}));
+        if (qp.has_value()) {
+            qp_padded = torch::nn::functional::pad(qp.value(), torch::nn::functional::PadFuncOptions({0, 8 - head_size_og % 8}));
+        }
     } else {
         q_padded = q;
         k_padded = k;
@@ -515,7 +528,7 @@ std::vector<at::Tensor>
 mha_varlen_fwd(at::Tensor &q,  // total_q x num_heads x head_size, total_q := \sum_{i=0}^{b} s_i
                const at::Tensor &k,  // total_k x num_heads_k x head_size, total_k := \sum_{i=0}^{b} s_i or num_blocks x page_block_size x num_heads_k x head_size if there's a block_table.
                const at::Tensor &v,  // total_k x num_heads_k x head_size, total_k := \sum_{i=0}^{b} s_i or num_blocks x page_block_size x num_heads_k x head_size if there's a block_table.
-               const at::Tensor &qp,  // total_k x num_heads_k x num_pos, total_k := \sum_{i=0}^{b} s_i or num_blocks x page_block_size x num_heads_k x head_size if there's a block_table.
+               c10::optional<const at::Tensor> &qp,  // total_k x num_heads_k x num_pos, total_k := \sum_{i=0}^{b} s_i or num_blocks x page_block_size x num_heads_k x head_size if there's a block_table.
                c10::optional<at::Tensor> &out_, // total_q x num_heads x head_size, total_k := \sum_{i=0}^{b} s_i
                const at::Tensor &cu_seqlens_q,  // b+1
                const at::Tensor &cu_seqlens_k,  // b+1
@@ -577,8 +590,7 @@ mha_varlen_fwd(at::Tensor &q,  // total_q x num_heads x head_size, total_q := \s
     int num_heads = sizes[1];
     const int head_size_og = sizes[2];
     const int num_heads_k = paged_KV ? k.size(2) : k.size(1);
-    const int num_pos = qp.size(3);
-
+    const int num_pos = qp.has_value() ? qp.value().size(2) : 0;
     const int max_num_blocks_per_seq = !paged_KV ? 0 : block_table.size(1);
     const int num_blocks = !paged_KV ? 0 : k.size(0);
     const int page_block_size = !paged_KV ? 1 : k.size(1);
@@ -630,12 +642,15 @@ mha_varlen_fwd(at::Tensor &q,  // total_q x num_heads x head_size, total_q := \s
         CHECK_SHAPE(seqused_k_, batch_size);
     }
 
-    at::Tensor q_padded, k_padded, v_padded, qp_padded;
+    at::Tensor q_padded, k_padded, v_padded;
+    c10::optional<at::Tensor> qp_padded;
     if (head_size_og % 8 != 0) {
         q_padded = torch::nn::functional::pad(q, torch::nn::functional::PadFuncOptions({0, 8 - head_size_og % 8}));
         k_padded = torch::nn::functional::pad(k, torch::nn::functional::PadFuncOptions({0, 8 - head_size_og % 8}));
         v_padded = torch::nn::functional::pad(v, torch::nn::functional::PadFuncOptions({0, 8 - head_size_og % 8}));
-        qp_padded = torch::nn::functional::pad(qp, torch::nn::functional::PadFuncOptions({0, 8 - head_size_og % 8}));
+        if (qp.has_value()) {
+            qp_padded = torch::nn::functional::pad(qp.value(), torch::nn::functional::PadFuncOptions({0, 8 - head_size_og % 8}));
+        }
     } else {
         q_padded = q;
         k_padded = k;
