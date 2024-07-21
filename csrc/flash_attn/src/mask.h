@@ -208,12 +208,10 @@ struct Mask {
                                     if (blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && threadIdx.x == 0) {
                                         const int block_col_idx = col_idx - col_idx_offset_;
                                         const int block_row_idx = row_idx - row_idx_offset;
-                                        printf("sQP layout"); print(sQP.layout());
-                                        printf("sQP tensor"); print_tensor(sQP);
                                         print(
                                           "\nCOL IDX %d, ROW IDX = %d, i = %d, j = %d, mi = %d, nj = %d, block_col_idx = %d, block_row_idx = %d => sQP = %f, S = %f\n",
                                           col_idx, row_idx, i, j, mi, nj, block_col_idx, block_row_idx,
-                                          sQP(block_row_idx, 0),
+                                          sQP(0, 0),
                                           tensor(make_coord(i, mi), make_coord(j, nj))
                                         );
                                     }
