@@ -179,21 +179,21 @@ struct Mask {
                 }
             } else {
                 // mi: 0..MMA_M = 0..kBlockM (?)
-                #pragma unroll
+                // #pragma unroll
                 for (int mi = 0; mi < size<0, 1>(tensor); ++mi) {
                     const int row_idx_base = row_idx_offset + mi * warp_row_stride;
                     // i: [0, 1] (?)
-                    #pragma unroll
+                    // #pragma unroll
                     for (int i = 0; i < size<0, 0>(tensor); ++i) {
                         const int row_idx = row_idx_base + i * 8;
                         const int col_idx_limit_left = std::max(0, row_idx + max_seqlen_k - max_seqlen_q - window_size_left);
                         const int col_idx_limit_right = std::min(max_seqlen_k, row_idx + 1 + max_seqlen_k - max_seqlen_q + window_size_right);
                         // nj: 0..MMA_N = 0..kBlockN (?)
-                        #pragma unroll
+                        // #pragma unroll
                         for (int nj = 0; nj < size<1, 1>(tensor); ++nj) {
                             const int col_idx_base = col_idx_offset + nj * 8;
                             // j: [0, 1] (?)
-                            #pragma unroll
+                            // #pragma unroll
                             for (int j = 0; j < size<1, 0>(tensor); ++j) {
                                 const int col_idx = col_idx_base + j;
                                 if constexpr (Has_alibi) {
