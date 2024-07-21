@@ -200,8 +200,9 @@ inline __device__ void compute_attn_1rowblock(const Params &params, const int bi
     // This allocates register space for a fragment of the final output
     Tensor acc_o = partition_fragment_C(tiled_mma, Shape<Int<kBlockM>, Int<kHeadDim>>{});  // MMA, MMA_M, MMA_K
 
-    if (blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && tidx == 0) {
+    /*if (blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && tidx == 0) {
         printf("----------------");
+        print_tensor(gQP);
         printf("\nHas_RPE: %d", Has_RPE);
         printf("\ngridDim:"); print(gridDim);
         printf("\nblockDim:"); print(blockDim);
@@ -229,7 +230,7 @@ inline __device__ void compute_attn_1rowblock(const Params &params, const int bi
         printf("\ntile_to_shape($1, $2) = SmemLayoutQP:"); print(typename Kernel_traits::SmemLayoutQP{});
         printf("\ntSrQP.shape():"); print(tSrQP.shape());
         printf("\n");
-    }
+    }*/
     // revealType<
     //     TypeWrapper_____<1, decltype(tSrQP.shape())>,
     //     TypeWrapper_____<2, decltype(tSrQ.shape())>,

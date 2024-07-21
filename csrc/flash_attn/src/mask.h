@@ -205,16 +205,16 @@ struct Mask {
                                 }
                                 if constexpr (Has_RPE) {
                                     const int diff_idx = std::min(127, std::max(0, col_idx - row_idx + 64));
-                                    const int block_col_idx = col_idx - col_idx_offset_;
                                     const int block_row_idx = row_idx - row_idx_offset;
-                                    if (blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && threadIdx.x == 0) {
+                                    // const int block_col_idx = col_idx - col_idx_offset_;
+                                    /*if (blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && threadIdx.x == 0) {
                                         print(
                                           "\nBLOCK COL %d, BLOCK ROW = %d, COL %d, ROW %d => S = %f, DIFF IDX=%d, QP = \n",
                                           block_col_idx, block_row_idx, col_idx, row_idx,
                                           tensor(make_coord(i, mi), make_coord(j, nj)),
                                           diff_idx
                                         ); print(sQP(block_row_idx, diff_idx));
-                                    }
+                                    }*/
                                     tensor(make_coord(i, mi), make_coord(j, nj)) += sQP(block_row_idx, diff_idx); // tSrQP_(make_coord(i, mi), diff_idx);
 
                                 }
