@@ -812,6 +812,7 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
     flash::copy<Is_even_MN, Is_even_K, /*Clear_OOB_MN=*/false, /*Clear_OOB_K=*/false>(
         gmem_tiled_copy_dKV, tdVrdV, tdVgdV, tdKVcdKV, tdKVpdKV, binfo.actual_seqlen_k - n_block * kBlockN
     );
+    //printf("Backward done !!\n");
 
 }
 
@@ -829,7 +830,7 @@ inline __device__ void compute_dq_dk_dv(const Params &params) {
     // The thread index.
     const int tidx = threadIdx.x;
 
-    if (tidx == 0 && bidb == 0 && bidh == 0) { printf("Backward now !!\n");}
+    //if (tidx == 0 && bidb == 0 && bidh == 0) { printf("Backward now !!\n");}
 
     const int n_block_max = (params.seqlen_k + Kernel_traits::kBlockN - 1) / Kernel_traits::kBlockN;
     if (n_block_max == 1) {
