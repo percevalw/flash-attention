@@ -715,6 +715,12 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
             flash::cp_async_fence();
         }
 
+        // COPY QP
+        __syncthreads(); // why do we need this?
+        tQPgQP.data() = tQPgQP.data() + (-int(kBlockM * params.qp_row_stride));
+        flash::copy</*Is_even_MN=*/true, Is_even_K>(gmem_tiled_copy_QKV, tQPgQP, tQPsQP, tQcQ, tQpQ);
+        flash::cp_async_fence();
+
         if (Is_first && m_block > m_block_min) {
             cute::copy(tdOrdO, tdOsdO);
             dot_do_o<Kernel_traits::kGmemThreadsPerRow>(tdOrdO, tdOrO, gdPsum,
