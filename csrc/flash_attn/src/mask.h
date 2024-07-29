@@ -131,7 +131,7 @@ struct Mask {
      *
      * @param tensor_ The block tensor to apply the mask to
      * @param tCrQP The QP tensor (RPE bias) to apply to the tensor
-     * @param col_idx_offset_ The column offset of the tensor
+     * @param col_block_idx_offset_ The column offset of the tensor
      * @param row_idx_offset The row offset of the tensor
      * @param warp_row_stride The stride of the rows
      */
@@ -139,8 +139,9 @@ struct Mask {
     __forceinline__ __device__ void apply_mask(
             Tensor<Engine, LayoutC> &tensor_, // (MMA=4, MMA_M, MMA_N)
             TensorQP &sQP,   // (kBlockM, kHeadDim)
-            const int col_idx_offset_,   // = n_block * kBlockN
-            const int row_idx_offset,
+            const int col_block_idx_offset,   // = n_block * kBlockN
+            const int row_block_idx_offset,   // = m_block * kBlockM
+            const int row_thread_idx_offset,
             const int warp_row_stride
     ) {
         static_assert(!(Causal_mask && Is_local), "Cannot be both causal and local");
@@ -157,7 +158,7 @@ struct Mask {
             static constexpr bool Col_idx_only = !Has_RPE && !(Has_alibi && !Is_causal) && !Is_local && !Causal_mask;
             const int lane_id = threadIdx.x % 32; // ranges from 0 to kBlockM = 128
             // col_idx_offset = n_block * kBlockN + (threadIdx.x % 4) * 2
-            const int col_idx_offset = col_idx_offset_ + (lane_id % 4) * 2;
+            const int col_idx_offset = col_block_idx_offset + (lane_id % 4) * 2;
             if constexpr (Col_idx_only) {
                 #pragma unroll
                 for (int mi = 0; mi < size<0>(tensor); ++mi) {
@@ -181,7 +182,7 @@ struct Mask {
                 // mi: 0..MMA_M = 0..kBlockM (?)
                 #pragma unroll
                 for (int mi = 0; mi < size<0, 1>(tensor); ++mi) {
-                    const int row_idx_base = row_idx_offset + mi * warp_row_stride;
+                    const int row_idx_base = row_thread_idx_offset + mi * warp_row_stride;
                     // i: [0, 1] (?)
                     #pragma unroll
                     for (int i = 0; i < size<0, 0>(tensor); ++i) {
@@ -205,15 +206,16 @@ struct Mask {
                                 }
                                 if constexpr (Has_RPE) {
                                     const int diff_idx = std::min(127, std::max(0, col_idx - row_idx + 64));
-                                    const int block_row_idx = row_idx - row_idx_offset;
-                                    // const int block_col_idx = col_idx - col_idx_offset_;
-                                    /*if (blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && threadIdx.x == 0) {
+                                    const int block_row_idx = row_idx - row_block_idx_offset;
+                                    // const int block_col_idx = col_idx - col_block_idx_offset;
+                                    /*if (false) {//blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && threadIdx.x == 0) {
                                         print(
-                                          "\nBLOCK COL %d, BLOCK ROW = %d, COL %d, ROW %d => S = %f, DIFF IDX=%d, QP = \n",
-                                          block_col_idx, block_row_idx, col_idx, row_idx,
-                                          tensor(make_coord(i, mi), make_coord(j, nj)),
-                                          diff_idx
-                                        ); print(sQP(block_row_idx, diff_idx));
+                                          "\nBLOCK ROW=%d, BLOCK COL=%d, ROW=%d, COL=%d, DIFF IDX=%d => QP=%f, S=%f\n",
+                                          block_row_idx, block_col_idx, row_idx, col_idx,
+                                          diff_idx,
+                                          float(sQP(block_row_idx, diff_idx)),
+                                          float(tensor(make_coord(i, mi), make_coord(j, nj)))
+                                        );
                                     }*/
                                     tensor(make_coord(i, mi), make_coord(j, nj)) += sQP(block_row_idx, diff_idx); // tSrQP_(make_coord(i, mi), diff_idx);
 

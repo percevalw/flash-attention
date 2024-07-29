@@ -209,6 +209,7 @@ inline __device__ void compute_attn_1rowblock(const Params &params, const int bi
         printf("\nbidb:"); print(bidb);
         printf("\nbidh:"); print(bidh);
         printf("\ntidx:"); print(tidx);
+         /*
         printf("\nmQ.layout():"); print(mQ.layout());
         printf("\nmQP.layout():"); print(mQP.layout());
         printf("\ngQ.layout():"); print(gQ.layout());
@@ -309,6 +310,10 @@ inline __device__ void compute_attn_1rowblock(const Params &params, const int bi
     // We don't need to clear the sK smem tiles since we'll mask out the scores anyway.
     flash::copy<Is_even_MN, Is_even_K>(gmem_tiled_copy_QKV, tKgK(_, _, _, n_block), tKsK, tKVcKV, tKVpKV,
                                        binfo.actual_seqlen_k - n_block * kBlockN);
+    if constexpr (Has_RPE) {
+        flash::copy<Is_even_MN, /*Is_even_K*/true>(gmem_tiled_copy_QKV, tQPgQP, tQPsQP, /*unused*/ tQcQ, /*unused*/tQpQ,
+                                                   binfo.actual_seqlen_q - m_block * kBlockM);
+    }
     cute::cp_async_fence();
     // if (threadIdx.x == 0 && blockIdx.y == 0 && blockIdx.z < 2) { print(tKgK); }
     // __syncthreads();
@@ -319,12 +324,6 @@ inline __device__ void compute_attn_1rowblock(const Params &params, const int bi
         Tensor tSrQ_copy_view = smem_thr_copy_Q.retile_D(tSrQ);
         CUTE_STATIC_ASSERT_V(size<1>(tSsQ) == size<1>(tSrQ_copy_view));            // M
         cute::copy(smem_tiled_copy_Q, tSsQ, tSrQ_copy_view);
-    }
-
-    if constexpr (Has_RPE) {
-        flash::copy<Is_even_MN, /*Is_even_K*/true>(gmem_tiled_copy_QKV, tQPgQP, tQPsQP, /*unused*/ tQcQ, /*unused*/tQpQ,
-                                                   binfo.actual_seqlen_q - m_block * kBlockM);
-        cute::cp_async_fence();
     }
 
     clear(acc_o);
@@ -351,6 +350,39 @@ inline __device__ void compute_attn_1rowblock(const Params &params, const int bi
     constexpr int n_masking_steps = (!Is_causal && !Is_local)
         ? 1
         : ((Is_even_MN && Is_causal) ? cute::ceil_div(kBlockM, kBlockN) : cute::ceil_div(kBlockM, kBlockN) + 1);
+
+    /*if (blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && tidx == 0) {
+        printf("----------------");
+        print_tensor(sQP);
+        printf("\nHas_RPE: %d", Has_RPE);
+        printf("\ngridDim:"); print(gridDim);
+        printf("\nblockDim:"); print(blockDim);
+        printf("\nbidb:"); print(bidb);
+        printf("\nbidh:"); print(bidh);
+        printf("\ntidx:"); print(tidx);
+        printf("\nmQ.layout():"); print(mQ.layout());
+        printf("\nmQP.layout():"); print(mQP.layout());
+        printf("\ngQ.layout():"); print(gQ.layout());
+        printf("\ngQP.layout():"); print(gQP.layout());
+        printf("\nsQ.layout():"); print(sQ.layout());
+        printf("\nsQP.layout():"); print(sQP.layout());
+        printf("\nsK.layout():"); print(sK.layout());
+        printf("\nsV.layout():"); print(sV.layout());
+        printf("\ntQgQ.layout():"); print(tQgQ.layout());
+        printf("\ntQsQ.layout():"); print(tQsQ.layout());
+        printf("\ntQPgQP.layout():"); print(tQPgQP.layout());
+        printf("\ntQPsQP.layout():"); print(tQPsQP.layout());
+        printf("\ntSrQP.layout():"); print(tSrQP.layout());
+        printf("\nSmemLayoutAtomQ:"); print(typename Kernel_traits::SmemLayoutAtomQ{});
+        printf("\nShape<Int<kBlockM>, Int<kHeadDim>> => ... ="); print(Shape<Int<kBlockM>, Int<kHeadDim>>{});
+        printf("\ntile_to_shape($1, $2) = SmemLayoutQ:"); print(typename Kernel_traits::SmemLayoutQ{});
+        printf("\nSmemLayoutAtomQP:"); print(typename Kernel_traits::SmemLayoutAtomQP{});
+        printf("\nShape<Int<kBlockM>, Int<kHeadDim>> => ... ="); print(Shape<Int<kBlockM>, Int<kHeadDim>>{});
+        printf("\ntile_to_shape($1, $2) = SmemLayoutQP:"); print(typename Kernel_traits::SmemLayoutQP{});
+        printf("\ntSrQP.shape():"); print(tSrQP.shape());
+        printf("\n");
+    }*/
+
     #pragma unroll
     for (int masking_step = 0; masking_step < n_masking_steps; ++masking_step, --n_block) {
         // This must be allocated in the registers ?
@@ -387,6 +419,7 @@ inline __device__ void compute_attn_1rowblock(const Params &params, const int bi
             sQP,
             // sQP,
             n_block * kBlockN,
+            m_block * kBlockM,
             m_block * kBlockM + (tidx / 32) * 16 + (tidx % 32) / 4,
             kNWarps * 16
         );
@@ -454,6 +487,7 @@ inline __device__ void compute_attn_1rowblock(const Params &params, const int bi
             sQP,
             // sQP,
             n_block * kBlockN, // col_idx_offset_
+            m_block * kBlockM, // col_idx_offset_
             m_block * kBlockM + (tidx / 32) * 16 + (tidx % 32) / 4, // row_idx_offset_
             kNWarps * 16 // warp_row_stride
         );
@@ -910,16 +944,14 @@ inline __device__ void compute_attn_1rowblock_splitkv(const Params &params, cons
     // We don't need to clear the sK smem tiles since we'll mask out the scores anyway.
     flash::copy<Is_even_MN, Is_even_K>(gmem_tiled_copy_QKV, tKgK, tKsK, tKVcKV, tKVpKV,
                                        binfo.actual_seqlen_k - n_block * kBlockN);
+    if constexpr (Has_RPE) {
+        flash::copy<Is_even_MN, /*Is_even_K*/true>(gmem_tiled_copy_QKV, tQPgQP, tQPsQP, /*unused*/ tQcQ, /*unused*/tQpQ,
+                                                   binfo.actual_seqlen_q - m_block * kBlockM);
+    }
     cute::cp_async_fence();
 
     // Read QP from gmem to smem
     CUTE_STATIC_ASSERT_V(size<1>(tQPgQP) == size<1>(tQPsQP));
-
-    if constexpr (Has_RPE) {
-        flash::copy<Is_even_MN, /*Is_even_K*/true>(gmem_tiled_copy_QKV, tQPgQP, tQPsQP, /*unused*/ tQcQ, /*unused*/tQpQ,
-                                                   binfo.actual_seqlen_q - m_block * kBlockM);
-        cute::cp_async_fence();
-    }
 
     // flash::cp_async_wait<0>();
     // __syncthreads();
@@ -983,6 +1015,7 @@ inline __device__ void compute_attn_1rowblock_splitkv(const Params &params, cons
             sQP,
             // tSrQP,
             n_block * kBlockN,
+            m_block * kBlockM,
             m_block * kBlockM + (tidx / 32) * 16 + (tidx % 32) / 4,
             kNWarps * 16
         );
@@ -1078,6 +1111,7 @@ inline __device__ void compute_attn_1rowblock_splitkv(const Params &params, cons
             sQP,
             // tSrQP,
             n_block * kBlockN,
+            m_block * kBlockM,
             m_block * kBlockM + (tidx / 32) * 16 + (tidx % 32) / 4,
             kNWarps * 16
         );
