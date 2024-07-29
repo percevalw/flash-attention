@@ -41,7 +41,7 @@ link_directories(${TORCH_LIBRARY_DIR})
 set(SOURCES
     csrc/flash_attn/flash_api.cpp
     csrc/flash_attn/src/flash_fwd_hdim128_fp16_sm80.cu
-    # csrc/flash_attn/src/flash_bwd_hdim128_fp16_sm80.cu
+    csrc/flash_attn/src/flash_bwd_hdim128_fp16_sm80.cu
     csrc/flash_attn/src/flash_fwd_split_hdim128_fp16_sm80.cu
 )
 

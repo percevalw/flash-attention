@@ -223,6 +223,14 @@ struct Flash_bwd_kernel_traits : public Base {
         SmemLayoutAtomQdO{},
         make_shape(Int<kBlockM>{}, Int<kHeadDim>{})));
 
+    using SmemLayoutAtomQPdO = decltype(
+        composition(Swizzle<kSwizzle, 3, 3>{},
+                    Layout<Shape<_8, Int<128>>,
+                           Stride<Int<128>, _1>>{}));
+    using SmemLayoutQPdO = decltype(tile_to_shape(
+        SmemLayoutAtomQPdO{},
+        make_shape(Int<kBlockM>{}, Int<128>{})));
+
     using SmemLayoutAtomKV = decltype(
         composition(Swizzle<kSwizzle, 3, 3>{},
                     Layout<Shape<Int<kBlockM / kNWarps>, Int<kBlockKSmem>>,
@@ -292,11 +300,11 @@ struct Flash_bwd_kernel_traits : public Base {
     static constexpr int kSmemPSize = size(SmemLayoutPdS{}) * sizeof(Element);
     static constexpr int kSmemdQSize = size(SmemLayoutdQ{}) * sizeof(Element);
     static constexpr int kSmemdQPSize = size(SmemLayoutdQP{}) * sizeof(Element);
-    static constexpr int kSmemSize = kSmemQdOSize
+    static constexpr int kSmemSize = kSmemQdOSize + kSmemdQPSize
         + (!Is_V_in_regs
            ? kSmemKVSize + kSmemdSSize + std::max(kSmemPSize, kSmemdQSize)
            : std::max(kSmemKVSize, kSmemKVSize / 2 + kSmemdSSize + std::max(kSmemPSize, kSmemdQSize)));
-    static constexpr int kSmemSize1colblock = kSmemQdOSize
+    static constexpr int kSmemSize1colblock = kSmemQdOSize + kSmemdQPSize
         + (!Is_V_in_regs
            ? kSmemKVSize + kSmemdSSize + kSmemPSize
            : std::max(kSmemKVSize, kSmemKVSize / 2 + kSmemdSSize + kSmemPSize));

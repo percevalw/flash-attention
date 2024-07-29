@@ -136,7 +136,7 @@ if not SKIP_CUDA_BUILD:
             sources=[
                 "csrc/flash_attn/flash_api.cpp",
                 "csrc/flash_attn/src/flash_fwd_hdim128_fp16_sm80.cu",
-                #"csrc/flash_attn/src/flash_bwd_hdim128_fp16_sm80.cu",
+                "csrc/flash_attn/src/flash_bwd_hdim128_fp16_sm80.cu",
                 "csrc/flash_attn/src/flash_fwd_split_hdim128_fp16_sm80.cu",
             ],
             extra_compile_args={
@@ -155,7 +155,7 @@ if not SKIP_CUDA_BUILD:
                         # "--ptxas-options=-v",
                         # "--ptxas-options=-O2",
                         # "-lineinfo",
-                        "-DFLASHATTENTION_DISABLE_BACKWARD",
+                        #"-DFLASHATTENTION_DISABLE_BACKWARD",
                         "-DFLASHATTENTION_DISABLE_DROPOUT",
                         "-DFLASHATTENTION_DISABLE_ALIBI",
                         # "-DFLASHATTENTION_DISABLE_UNEVEN_K",

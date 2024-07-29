@@ -153,11 +153,13 @@ struct Flash_bwd_params : public Flash_fwd_params {
     void *__restrict__ dq_ptr;
     void *__restrict__ dk_ptr;
     void *__restrict__ dv_ptr;
+    void *__restrict__ dqp_ptr;
 
-    // To accumulate dQ
+    // To accumulate dQ, dK, dV and dQP
     void *__restrict__ dq_accum_ptr;
     void *__restrict__ dk_accum_ptr;
     void *__restrict__ dv_accum_ptr;
+    void *__restrict__ dqp_accum_ptr;
 
     // // To accumulate dK and dV in case we're splitting the bwd along seqlen_q
     // dimension void *__restrict__ dk_accum_ptr; void *__restrict__
@@ -172,12 +174,15 @@ struct Flash_bwd_params : public Flash_fwd_params {
     index_t dq_batch_stride;
     index_t dk_batch_stride;
     index_t dv_batch_stride;
+    index_t dqp_batch_stride;
     index_t dq_row_stride;
     index_t dk_row_stride;
     index_t dv_row_stride;
+    index_t dqp_row_stride;
     index_t dq_head_stride;
     index_t dk_head_stride;
     index_t dv_head_stride;
+    index_t dqp_head_stride;
 
     // The pointer to the softmax d sum.
     void *__restrict__ dsoftmax_sum;
@@ -190,3 +195,5 @@ struct Flash_bwd_params : public Flash_fwd_params {
 
 template<typename T, int Headdim> void run_mha_fwd_(Flash_fwd_params &params, cudaStream_t stream);
 template<typename T, int Headdim> void run_mha_fwd_splitkv_dispatch(Flash_fwd_params &params, cudaStream_t stream);
+
+template<typename T, int Headdim> void run_mha_bwd_(Flash_bwd_params &params, cudaStream_t stream);

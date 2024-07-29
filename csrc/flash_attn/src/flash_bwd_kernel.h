@@ -76,7 +76,7 @@ make_tiled_copy_C_warpcontiguousN(Copy_Atom<Args...> const& copy_atom,
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-template<typename Kernel_traits, bool Is_dropout, bool Is_causal, bool Is_local, bool Has_alibi, bool Is_even_MN, bool Is_even_K, bool Is_first, bool Is_last, bool Seq_parallel=false, typename Params>
+template<typename Kernel_traits, bool Is_dropout, bool Is_causal, bool Is_local, bool Has_alibi, bool Has_RPE, bool Is_even_MN, bool Is_even_K, bool Is_first, bool Is_last, bool Seq_parallel=false, typename Params>
 inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const int bidb, const int bidh, const int n_block) {
 
     using Element = typename Kernel_traits::Element;
@@ -106,6 +106,8 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
 
     const index_t row_offset_q = binfo.q_offset(params.q_batch_stride, params.q_row_stride, bidb)
         + (m_block_max - 1) * kBlockM * params.q_row_stride + bidh * params.q_head_stride;
+    const index_t row_offset_qp = binfo.q_offset(params.qp_batch_stride, params.qp_row_stride, bidb)
+        + (m_block_max - 1) * kBlockM * params.qp_row_stride + bidh * params.qp_head_stride;
     const index_t row_offset_k = binfo.k_offset(params.k_batch_stride, params.k_row_stride, bidb)
         + n_block * kBlockN * params.k_row_stride + (bidh / params.h_h_k_ratio) * params.k_head_stride;
     const index_t row_offset_v = binfo.k_offset(params.v_batch_stride, params.v_row_stride, bidb)
@@ -116,6 +118,8 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
         + (m_block_max - 1) * kBlockM * params.o_row_stride + bidh * params.o_head_stride;
     const index_t row_offset_dq = binfo.q_offset(params.dq_batch_stride, params.dq_row_stride, bidb)
         + (m_block_max - 1) * kBlockM * params.dq_row_stride + bidh * params.dq_head_stride;
+    const index_t row_offset_dqp = binfo.q_offset(params.dqp_batch_stride, params.dqp_row_stride, bidb)
+        + (m_block_max - 1) * kBlockM * params.dqp_row_stride + bidh * params.dqp_head_stride;
     const index_t row_offset_dq_accum = binfo.q_offset(params.seqlen_q_rounded * params.h * params.d_rounded, params.h * params.d_rounded, bidb)
         + ((m_block_max - 1) * kBlockM + (params.cu_seqlens_q == nullptr ? 0 : 128 * bidb)) * params.h * params.d_rounded + bidh * params.d_rounded
         // If deterministic, each thread block will do atomicAdd to a different dQ_accum buffer.
@@ -128,6 +132,9 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
     Tensor gQ = make_tensor(make_gmem_ptr(reinterpret_cast<Element *>(params.q_ptr) + row_offset_q),
                             Shape<Int<kBlockM>, Int<kHeadDim>>{},
                             make_stride(params.q_row_stride, _1{}));
+    Tensor gQP = make_tensor(make_gmem_ptr(reinterpret_cast<Element *>(params.qp_ptr) + row_offset_qp),
+                            Shape<Int<kBlockM>, Int<128>>{},
+                            make_stride(params.qp_row_stride, _1{}));
     Tensor gK = make_tensor(make_gmem_ptr(reinterpret_cast<Element *>(params.k_ptr) + row_offset_k),
                             Shape<Int<kBlockN>, Int<kHeadDim>>{},
                             make_stride(params.k_row_stride, _1{}));
@@ -155,6 +162,10 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
                             typename Kernel_traits::SmemLayoutQdO{});
     Tensor sQt = make_tensor(sQ.data(), typename Kernel_traits::SmemLayoutQdOtransposed{});
     Tensor sQtNoSwizzle = make_tensor(sQ.data(), typename Kernel_traits::SmemLayoutQdOtransposedNoSwizzle{});
+
+    //Tensor sQPt = make_tensor(sQP.data(), typename Kernel_traits::SmemLayoutQPdOtransposed{});
+    //Tensor sQPtNoSwizzle = make_tensor(sQP.data(), typename Kernel_traits::SmemLayoutQdOtransposedNoSwizzle{});
+
     // Double buffer for sQ
     Tensor sdO = make_tensor(sQ.data() + (Double_buffer ? 2 : 1) * size(sQ), typename Kernel_traits::SmemLayoutQdO{});
     Tensor sdOt = make_tensor(sdO.data(), typename Kernel_traits::SmemLayoutQdOtransposed{});
@@ -173,6 +184,10 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
     Tensor sPtNoSwizzle = make_tensor(sP.data(), typename Kernel_traits::SmemLayoutPdStransposedNoSwizzle{});
     // sP and sdQ share the same memory so be careful
     Tensor sdQ = make_tensor(sP.data(), typename Kernel_traits::SmemLayoutdQ{});
+
+    Tensor sQP = make_tensor(sdQ.data() + size(sdQ),
+                            typename Kernel_traits::SmemLayoutQPdO{});
+
 
     typename Kernel_traits::GmemTiledCopyQKV gmem_tiled_copy_QKV;
     auto gmem_thr_copy_QKV = gmem_tiled_copy_QKV.get_thread_slice(tidx);
@@ -195,6 +210,8 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
 
     Tensor tQgQ = gmem_thr_copy_QKV.partition_S(gQ);
     Tensor tQsQ = gmem_thr_copy_QKV.partition_D(sQ);
+    Tensor tQPgQP = gmem_thr_copy_QKV.partition_S(gQP);
+    Tensor tQPsQP = gmem_thr_copy_QKV.partition_D(sQP);
     Tensor tdOgdO = gmem_thr_copy_dO.partition_S(gdO);
     Tensor tdOsdO = gmem_thr_copy_dO.partition_D(sdO);
     Tensor tdOgO = gmem_thr_copy_dO.partition_S(gO);
@@ -205,11 +222,12 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
     Tensor tdQsdQ = gmem_thr_copy_dQ.partition_S(sdQ);    // ((Atom,AtomNum),ATOM_M,ATOM_N)
     Tensor tdQgdQ = gmem_thr_copy_dQ.partition_D(gdQ);
     Tensor tdQgdQaccum = gmem_thr_copy_dQaccum.partition_D(gdQaccum);
-    // if (cute::thread0()) { print(tdQgdQaccum.layout()); printf("\n"); }
+
+    //if (cute::thread0()) { print(tdQgdQaccum.layout()); printf("\n"); }
     // __syncthreads();
     // if (blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && tidx < 64) {
     //     printf("tidx = %d, tdQgdQaccum = 0x%p\n", tidx, tdQgdQaccum.data());
-    // }
+    //}
 
     typename Kernel_traits::TiledMmaSdP tiled_mma_sdp;
     auto thr_mma_sdp = tiled_mma_sdp.get_thread_slice(tidx);
@@ -395,6 +413,9 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
     }
     flash::copy<Is_even_MN, Is_even_K, /*Clear_OOB_MN=*/true>(
         gmem_tiled_copy_QKV, tQgQ, tQsQ, tQcQ, tQpQ, binfo.actual_seqlen_q - m_block * kBlockM
+    );
+    flash::copy<Is_even_MN, Is_even_K, /*Clear_OOB_MN=*/true>(
+        gmem_tiled_copy_QKV, tQPgQP, tQPsQP, /*unused*/tQcQ, /*unused*/tQpQ, binfo.actual_seqlen_q - m_block * kBlockM
     );
 
     Tensor caccS = make_identity_tensor(Shape<Int<kBlockM>, Int<kBlockN>>{});    // (BLK_M,BLK_N) -> (blk_m,blk_n)
@@ -781,7 +802,7 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-template<typename Kernel_traits, bool Is_dropout, bool Is_causal, bool Has_alibi, bool Is_even_M, bool Is_even_K, typename Params>
+template<typename Kernel_traits, bool Is_dropout, bool Is_causal, bool Has_alibi, bool Has_RPE, bool Is_even_M, bool Is_even_K, typename Params>
 inline __device__ void compute_dq_dk_dv(const Params &params) {
 
     // The block index for the batch.
@@ -793,22 +814,24 @@ inline __device__ void compute_dq_dk_dv(const Params &params) {
     // The thread index.
     const int tidx = threadIdx.x;
 
+    if (tidx == 0 and bidb == 0 and bidh == 0) { printf("Backward now !\n");}
+
     const int n_block_max = (params.seqlen_k + Kernel_traits::kBlockN - 1) / Kernel_traits::kBlockN;
     if (n_block_max == 1) {
-        compute_dq_dk_dv_1colblock<Kernel_traits, Is_dropout, Is_causal, Has_alibi, Is_even_M, Is_even_K, true, true>(params, bidb, bidh, 0);
+        compute_dq_dk_dv_1colblock<Kernel_traits, Is_dropout, Is_causal, Has_alibi, Has_RPE, Is_even_M, Is_even_K, true, true>(params, bidb, bidh, 0);
     } else {
         // Iterating backward from n_block_max - 1 to 0 might save 1 register
-        compute_dq_dk_dv_1colblock<Kernel_traits, Is_dropout, Is_causal, Has_alibi, Is_even_M, Is_even_K, true, false>(params, bidb, bidh, n_block_max - 1);
+        compute_dq_dk_dv_1colblock<Kernel_traits, Is_dropout, Is_causal, Has_alibi, Has_RPE, Is_even_M, Is_even_K, true, false>(params, bidb, bidh, n_block_max - 1);
         for (int n_block = n_block_max - 2; n_block > 0; n_block--) {
-            compute_dq_dk_dv_1colblock<Kernel_traits, Is_dropout, Is_causal, Has_alibi, Is_even_M, Is_even_K, false, false>(params, bidb, bidh, n_block);
+            compute_dq_dk_dv_1colblock<Kernel_traits, Is_dropout, Is_causal, Has_alibi, Has_RPE, Is_even_M, Is_even_K, false, false>(params, bidb, bidh, n_block);
         }
-        compute_dq_dk_dv_1colblock<Kernel_traits, Is_dropout, Is_causal, Has_alibi, Is_even_M, Is_even_K, false, true>(params, bidb, bidh, 0);
+        compute_dq_dk_dv_1colblock<Kernel_traits, Is_dropout, Is_causal, Has_alibi, Has_RPE, Is_even_M, Is_even_K, false, true>(params, bidb, bidh, 0);
     }
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-template<typename Kernel_traits, bool Is_dropout, bool Is_causal, bool Is_local, bool Has_alibi, bool Is_even_MN, bool Is_even_K, typename Params>
+template<typename Kernel_traits, bool Is_dropout, bool Is_causal, bool Is_local, bool Has_alibi, bool Has_RPE, bool Is_even_MN, bool Is_even_K, typename Params>
 inline __device__ void compute_dq_dk_dv_seqk_parallel(const Params &params) {
 
     // The block index for the batch.
@@ -818,7 +841,7 @@ inline __device__ void compute_dq_dk_dv_seqk_parallel(const Params &params) {
 
     // If deterministic, each thread block will do atomicAdd to a different dQ_accum buffer.
     for (int n_block = blockIdx.x; n_block < (params.seqlen_k + Kernel_traits::kBlockN - 1) / Kernel_traits::kBlockN; n_block += gridDim.x) {
-        compute_dq_dk_dv_1colblock<Kernel_traits, Is_dropout, Is_causal, Is_local, Has_alibi, Is_even_MN, Is_even_K, false, false, /*Seq_parallel=*/true>(params, bidb, bidh, n_block);
+        compute_dq_dk_dv_1colblock<Kernel_traits, Is_dropout, Is_causal, Is_local, Has_alibi, Has_RPE, Is_even_MN, Is_even_K, false, false, /*Seq_parallel=*/true>(params, bidb, bidh, n_block);
     }
 }
 
