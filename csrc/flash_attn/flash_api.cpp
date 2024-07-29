@@ -194,7 +194,7 @@ void set_params_dgrad(Flash_bwd_params &params,
 
     set_params_fprop(params,
                      b, seqlen_q, seqlen_k, seqlen_q_rounded, seqlen_k_rounded, h, h_k, d, d_rounded, num_pos,
-                     q, k, v, qp,out,
+                     q, k, v, qp, out,
                      cu_seqlens_q_d,
                      cu_seqlens_k_d,
                      nullptr,
@@ -950,11 +950,11 @@ mha_bwd(const at::Tensor &dout,  // batch_size x seqlen_q x num_heads, x head_si
     if (loop) {
         if (!deterministic) {
             dq_accum = torch::empty({batch_size, seqlen_q_rounded, num_heads, head_size_rounded}, opts.dtype(at::kFloat));
-            dqp_accum = torch::empty({batch_size, seqlen_k_rounded, num_heads_k, num_pos}, opts.dtype(at::kFloat));
+            dqp_accum = torch::empty({batch_size, seqlen_q_rounded, num_heads, num_pos}, opts.dtype(at::kFloat));
         } else {
             const int nsplits = (dprops->multiProcessorCount + batch_size * num_heads - 1) / (batch_size * num_heads);
             dq_accum = torch::zeros({nsplits, batch_size, seqlen_q_rounded, num_heads, head_size_rounded}, opts.dtype(at::kFloat));
-            dqp_accum = torch::zeros({nsplits, batch_size, seqlen_k_rounded, num_heads_k, num_pos}, opts.dtype(at::kFloat));
+            dqp_accum = torch::zeros({nsplits, batch_size, seqlen_q_rounded, num_heads, num_pos}, opts.dtype(at::kFloat));
         }
         // dk_accum = torch::empty({batch_size, num_heads_k, seqlen_k_rounded, head_size_rounded}, opts.dtype(at::kFloat));
         // dv_accum = torch::empty({batch_size, num_heads_k, seqlen_k_rounded, head_size_rounded}, opts.dtype(at::kFloat));
@@ -994,6 +994,7 @@ mha_bwd(const at::Tensor &dout,  // batch_size x seqlen_q x num_heads, x head_si
                      window_size_right,
                      deterministic);
     params.dq_accum_split_stride = !deterministic ? 0 : dq_accum.stride(0);
+    params.dqp_accum_split_stride = !deterministic ? 0 : dqp_accum.stride(0);
 
     auto launch = &run_mha_bwd;
 
@@ -1209,11 +1210,11 @@ mha_varlen_bwd(const at::Tensor &dout,  // total_q x num_heads, x head_size
         // allowed to do. So we won't have to do any bound checking, and performance should stay the same.
         if (!deterministic) {
             dq_accum = torch::empty({total_q + 128 * batch_size, num_heads, head_size_rounded}, opts.dtype(at::kFloat));
-            dqp_accum = torch::empty({total_k + 128 * batch_size, num_heads_k, num_pos}, opts.dtype(at::kFloat));
+            dqp_accum = torch::empty({total_q + 128 * batch_size, num_heads_k, num_pos}, opts.dtype(at::kFloat));
         } else {
             const int nsplits = (dprops->multiProcessorCount + batch_size * num_heads - 1) / (batch_size * num_heads);
             dq_accum = torch::zeros({nsplits, total_q + 128 * batch_size, num_heads, head_size_rounded}, opts.dtype(at::kFloat));
-            dqp_accum = torch::zeros({nsplits, total_k + 128 * batch_size, num_heads_k, num_pos}, opts.dtype(at::kFloat));
+            dqp_accum = torch::zeros({nsplits, total_q + 128 * batch_size, num_heads_k, num_pos}, opts.dtype(at::kFloat));
         }
     }
 

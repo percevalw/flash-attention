@@ -299,12 +299,12 @@ struct Flash_bwd_kernel_traits : public Base {
     static constexpr int kSmemdSSize = size(SmemLayoutPdS{}) * sizeof(Element);
     static constexpr int kSmemPSize = size(SmemLayoutPdS{}) * sizeof(Element);
     static constexpr int kSmemdQSize = size(SmemLayoutdQ{}) * sizeof(Element);
-    static constexpr int kSmemdQPSize = size(SmemLayoutdQP{}) * sizeof(Element);
-    static constexpr int kSmemSize = kSmemQdOSize + kSmemdQPSize
+    static constexpr int kSmemdQPdOSize = size(SmemLayoutQPdO{}) * sizeof(Element);
+    static constexpr int kSmemSize = kSmemQdOSize + kSmemdQPdOSize
         + (!Is_V_in_regs
            ? kSmemKVSize + kSmemdSSize + std::max(kSmemPSize, kSmemdQSize)
            : std::max(kSmemKVSize, kSmemKVSize / 2 + kSmemdSSize + std::max(kSmemPSize, kSmemdQSize)));
-    static constexpr int kSmemSize1colblock = kSmemQdOSize + kSmemdQPSize
+    static constexpr int kSmemSize1colblock = kSmemQdOSize + kSmemdQPdOSize
         + (!Is_V_in_regs
            ? kSmemKVSize + kSmemdSSize + kSmemPSize
            : std::max(kSmemKVSize, kSmemKVSize / 2 + kSmemdSSize + kSmemPSize));

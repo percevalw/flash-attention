@@ -222,12 +222,11 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
     Tensor tdQsdQ = gmem_thr_copy_dQ.partition_S(sdQ);    // ((Atom,AtomNum),ATOM_M,ATOM_N)
     Tensor tdQgdQ = gmem_thr_copy_dQ.partition_D(gdQ);
     Tensor tdQgdQaccum = gmem_thr_copy_dQaccum.partition_D(gdQaccum);
-
-    //if (cute::thread0()) { print(tdQgdQaccum.layout()); printf("\n"); }
+    // if (cute::thread0()) { print(tdQgdQaccum.layout()); printf("\n"); }
     // __syncthreads();
     // if (blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && tidx < 64) {
     //     printf("tidx = %d, tdQgdQaccum = 0x%p\n", tidx, tdQgdQaccum.data());
-    //}
+    // }
 
     typename Kernel_traits::TiledMmaSdP tiled_mma_sdp;
     auto thr_mma_sdp = tiled_mma_sdp.get_thread_slice(tidx);
