@@ -191,7 +191,6 @@ void set_params_dgrad(Flash_bwd_params &params,
                       int window_size_left,
                       int window_size_right,
                       bool deterministic) {
-
     set_params_fprop(params,
                      b, seqlen_q, seqlen_k, seqlen_q_rounded, seqlen_k_rounded, h, h_k, d, d_rounded, num_pos,
                      q, k, v, qp, out,
@@ -1178,6 +1177,8 @@ mha_varlen_bwd(const at::Tensor &dout,  // total_q x num_heads, x head_size
         CHECK_DEVICE(dqp);
         TORCH_CHECK(dqp.stride(-1) == 1, "dqp must have contiguous last dimension");
         CHECK_SHAPE(dqp, total_k, num_heads_k, num_pos);
+    } else {
+        dqp = torch::empty_like(qp.value());
     }
 
 
@@ -1210,11 +1211,11 @@ mha_varlen_bwd(const at::Tensor &dout,  // total_q x num_heads, x head_size
         // allowed to do. So we won't have to do any bound checking, and performance should stay the same.
         if (!deterministic) {
             dq_accum = torch::empty({total_q + 128 * batch_size, num_heads, head_size_rounded}, opts.dtype(at::kFloat));
-            dqp_accum = torch::empty({total_q + 128 * batch_size, num_heads_k, num_pos}, opts.dtype(at::kFloat));
+            dqp_accum = torch::empty({total_q + 128 * batch_size, num_heads, num_pos}, opts.dtype(at::kFloat));
         } else {
             const int nsplits = (dprops->multiProcessorCount + batch_size * num_heads - 1) / (batch_size * num_heads);
             dq_accum = torch::zeros({nsplits, total_q + 128 * batch_size, num_heads, head_size_rounded}, opts.dtype(at::kFloat));
-            dqp_accum = torch::zeros({nsplits, total_q + 128 * batch_size, num_heads_k, num_pos}, opts.dtype(at::kFloat));
+            dqp_accum = torch::zeros({nsplits, total_q + 128 * batch_size, num_heads, num_pos}, opts.dtype(at::kFloat));
         }
     }
 
@@ -1233,6 +1234,7 @@ mha_varlen_bwd(const at::Tensor &dout,  // total_q x num_heads, x head_size
         dv_expanded.zero_();
         softmax_d.zero_();
     }
+
 
     Flash_bwd_params params;
 
