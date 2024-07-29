@@ -17,7 +17,7 @@
 #include "mask.h"
 #include "dropout.h"
 
-#include "alibi.h"
+#include "relative_position_bias.h"
 
 namespace flash {
 
@@ -470,7 +470,11 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
     clear(acc_dk);
 
     const float alibi_slope = !Has_alibi || params.alibi_slopes_ptr == nullptr ? 0.0f : reinterpret_cast<float *>(params.alibi_slopes_ptr)[bidb * params.alibi_slopes_batch_stride + bidh] / params.scale_softmax;
-    flash::Alibi<Is_causal> alibi(alibi_slope, binfo.actual_seqlen_k, binfo.actual_seqlen_q);
+    flash::RelativePositionBias<Is_causal, Has_alibi, Has_RPE> rpb(
+        alibi_slope,
+        binfo.actual_seqlen_k,
+        binfo.actual_seqlen_q
+    );
 
     for (; m_block >= m_block_min; --m_block) {
         Tensor acc_s = partition_fragment_C(tiled_mma_sdp, Shape<Int<kBlockM>, Int<kBlockN>>{});  // (MMA=4, MMA_N, MMA_N)
@@ -496,9 +500,15 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
         Tensor scores = make_tensor(acc_s.data(), flash::convert_layout_acc_rowcol(acc_s.layout()));
         // if (cute::thread(32, 0)) { print(scores); }
 
-        if (Has_alibi) {
-            alibi.apply_alibi(scores, n_block * kBlockN + (tidx / 32 / AtomLayoutMS) * MMA_N_SdP * 16,
-                              m_block * kBlockM + get<0>(taccScS_row(0)), AtomLayoutMS * 16);
+        if constexpr (Has_alibi || Has_RPE) {
+            rpb.apply_relative_position_bias(
+                scores,
+                sQP,
+                n_block * kBlockN + (tidx / 32 / AtomLayoutMS) * MMA_N_SdP * 16,  // col_idx_offset_
+                m_block * kBlockM + get<0>(taccScS_row(0)),  // row_idx_offset
+                AtomLayoutMS * 16,  // warp_row_stride,
+                m_block * kBlockM  // row_block_idx_offset
+            );
         }
 
         // TD [2023-07-29]: I was thinking that we don't need to mask out the elements beyond
@@ -813,7 +823,7 @@ inline __device__ void compute_dq_dk_dv(const Params &params) {
     // The thread index.
     const int tidx = threadIdx.x;
 
-    if (tidx == 0 and bidb == 0 and bidh == 0) { printf("Backward now !\n");}
+    if (tidx == 0 && bidb == 0 && bidh == 0) { printf("Backward now !!\n");}
 
     const int n_block_max = (params.seqlen_k + Kernel_traits::kBlockN - 1) / Kernel_traits::kBlockN;
     if (n_block_max == 1) {
