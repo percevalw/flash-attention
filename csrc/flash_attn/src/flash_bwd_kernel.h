@@ -605,6 +605,11 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
         auto pointwise_mult = [](float p, float dp, float d) {
             return p * (!Is_dropout || p >= 0 ? dp - d : d);
         };
+        /*if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) {
+            printf("\ndP_sum.layout() = "); print(dP_sum.layout());
+            printf("\nscores.layout() = "); print(scores.layout());
+            printf("\ndS.layout() = "); print(dS.layout());
+        }*/
         #pragma unroll
         for (int mi = 0; mi < size<0, 1>(dS); ++mi) {
             const int row_idx_base = row_idx_offset + mi * warp_row_stride;
@@ -617,16 +622,18 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
                     #pragma unroll
                     for (int j = 0; j < size<1, 0>(dS); ++j) {
                         const int col_idx = col_idx_base + j;
-                        dS(make_coord(i, mi), nj) = pointwise_mult(
+                        dS(make_coord(i, mi), make_coord(j, nj)) = pointwise_mult(
                             scores(make_coord(i, mi), make_coord(j, nj)),
                             dS(make_coord(i, mi), make_coord(j, nj)),
-                            dP_sum(make_coord(i, mi))
+                            // dP_sum is flat so we can't must compute the idx from mi and i
+                            // there must be some smarter way to do this
+                            dP_sum(i + mi * stride<0, 0>(dS))
                         );
                     }
                 }
             }
         }
-        
+
         // if (cute::thread0()) { print(dS); }
 
         Tensor acc_dq = partition_fragment_C(tiled_mma_dq, Shape<Int<kBlockM>, Int<kHeadDim>>{});  // MMA, MMA_N, MMA_K
