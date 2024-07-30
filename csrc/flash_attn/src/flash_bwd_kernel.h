@@ -500,13 +500,17 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
         Tensor scores = make_tensor(acc_s.data(), flash::convert_layout_acc_rowcol(acc_s.layout()));
         // if (cute::thread(32, 0)) { print(scores); }
 
+        const int row_idx_offset = m_block * kBlockM + get<0>(taccScS_row(0));
+        const int warp_row_stride = AtomLayoutMS * 16;
+        const int col_idx_offset = n_block * kBlockN + (tidx / 32 / AtomLayoutMS) * MMA_N_SdP * 16;
+
         if constexpr (Has_alibi || Has_RPE) {
             rpb.apply_relative_position_bias(
                 scores,
                 sQP,
-                n_block * kBlockN + (tidx / 32 / AtomLayoutMS) * MMA_N_SdP * 16,  // col_idx_offset_
-                m_block * kBlockM + get<0>(taccScS_row(0)),  // row_idx_offset
-                AtomLayoutMS * 16,  // warp_row_stride,
+                col_idx_offset,  // col_idx_offset_
+                row_idx_offset,  // row_idx_offset
+                warp_row_stride,  // warp_row_stride,
                 m_block * kBlockM  // row_block_idx_offset
             );
         }
@@ -602,12 +606,27 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
             return p * (!Is_dropout || p >= 0 ? dp - d : d);
         };
         #pragma unroll
-        for (int mi = 0; mi < size<0>(dS); ++mi) {
+        for (int mi = 0; mi < size<0, 1>(dS); ++mi) {
+            const int row_idx_base = row_idx_offset + mi * warp_row_stride;
             #pragma unroll
-            for (int ni = 0; ni < size<1>(dS); ++ni) {
-                dS(mi, ni) = pointwise_mult(scores(mi, ni), dS(mi, ni), dP_sum(mi));
+            for (int i = 0; i < size<0, 0>(dS); ++i) {
+                const int row_idx = row_idx_base + i * 8;
+                #pragma unroll
+                for (int nj = 0; nj < size<1, 1>(dS); ++nj) {
+                    const int col_idx_base = col_idx_offset + nj * 8;
+                    #pragma unroll
+                    for (int j = 0; j < size<1, 0>(dS); ++j) {
+                        const int col_idx = col_idx_base + j;
+                        dS(make_coord(i, mi), nj) = pointwise_mult(
+                            scores(make_coord(i, mi), make_coord(j, nj)),
+                            dS(make_coord(i, mi), make_coord(j, nj)),
+                            dP_sum(make_coord(i, mi))
+                        );
+                    }
+                }
             }
         }
+        
         // if (cute::thread0()) { print(dS); }
 
         Tensor acc_dq = partition_fragment_C(tiled_mma_dq, Shape<Int<kBlockM>, Int<kHeadDim>>{});  // MMA, MMA_N, MMA_K
