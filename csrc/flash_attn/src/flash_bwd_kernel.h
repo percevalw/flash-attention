@@ -657,9 +657,6 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
                     for (int j = 0; j < size<1, 0>(dS); ++j) {
                         const int col_idx = col_idx_base + j;
                         const int diff_idx = std::min(127, std::max(0, col_idx - row_idx + 64));
-                        if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) {
-                            printf0("row_idx=%d, block_row_idx=%d, diff_idx=%d\n", row_idx, block_row_idx, diff_idx);
-                        }
                         const float dS_val = pointwise_mult(
                             scores(make_coord(i, mi), make_coord(j, nj)),
                             dS(make_coord(i, mi), make_coord(j, nj)),
@@ -669,9 +666,8 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
                         );
                         dS(make_coord(i, mi), make_coord(j, nj)) = dS_val;
                         // need to cast to half ?
-                        // sdQP(block_row_idx, diff_idx) = dS_val * params.scale_softmax_rp_dropout;
-                        // printf0("row_idx=%d, block_row_idx=%d, diff_idx=%d => dS_val=%f\n", row_idx, block_row_idx, diff_idx,
-                        //        float(dS_val) * params.scale_softmax_rp_dropout);
+                        sdQP(block_row_idx, diff_idx) = sdQP(block_row_idx, diff_idx) + dS_val * params.scale_softmax_rp_dropout;
+                        // printf0("row_idx=%d, block_row_idx=%d, diff_idx=%d => dS_val=%f\n", row_idx, block_row_idx, diff_idx, float(dS_val) * params.scale_softmax_rp_dropout);
                     }
                 }
             }
@@ -811,10 +807,10 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
             dot_do_o<Kernel_traits::kGmemThreadsPerRow>(tdOrdO, tdOrO, gdPsum,
                                                         Kernel_traits::kNThreads / (Kernel_traits::kGmemThreadsPerRow), params.p_dropout);
         }
-        debug_printf0("HERE X22\n");
+        printf0("HERE X22\n");
 
         if (Is_last) {
-            debug_printf0("HERE X23\n");
+            printf0("HERE X23\n");
             __syncthreads();
             Tensor tdQrdQ = make_tensor<Element>(shape(tdQgdQ));
             cute::copy(gmem_tiled_copy_dQ, tdQsdQ, tdQrdQ);
@@ -825,13 +821,27 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
             for (int m = 0; m < size<1>(tdQgdQ); ++m) {
                 if (Is_even_MN || get<0>(tdQcdQ(0, m, 0)) < binfo.actual_seqlen_q - m_block * kBlockM) {
                     cute::copy(gmem_tiled_copy_dQ, tdQrdQ(_, m, _), tdQgdQ(_, m, _));
+                    cute::copy(gmem_tiled_copy_dQ, tdQPsdQP(_, m, _), tdQPgdQP(_, m, _));
                 }
             }
             debug_printf0("HERE X24\n");
         }
+        {
+            printf0("HERE ZZZ\n");
+            __syncthreads();
+            Tensor cdQ = make_identity_tensor(Shape<Int<kBlockM>, Int<kHeadDim>>{});    // (BLK_M,BLK_K) -> (blk_m,blk_k)
+            Tensor tdQcdQ = gmem_thr_copy_dQ.partition_D(cdQ);
+            #pragma unroll
+            for (int m = 0; m < size<1>(tdQgdQ); ++m) {
+                if (Is_even_MN || get<0>(tdQcdQ(0, m, 0)) < binfo.actual_seqlen_q - m_block * kBlockM) {
+                    cute::copy(gmem_tiled_copy_dQ, tdQPsdQP(_, m, _), tdQPgdQP(_, m, _));
+                }
+            }
+            printf0("HERE ZZZ2\n");
+        }
 
     }
-    debug_printf0("HERE X25\n");
+    printf0("HERE X25\n");
 
     // Epilogue
 
@@ -862,7 +872,7 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
     // is reading it for dQ gemm, leading to a race condition.
     // If Is_last, there's already a __syncthreads() at the end of the loop.
     if (!Is_last) { __syncthreads(); }
-    debug_printf0("HERE X26\n");
+    printf0("HERE X26\n");
 
     cute::copy(smem_tiled_copy_dKV, taccdKrdK, taccdKsdK);
     cute::copy(smem_tiled_copy_dKV, taccdVrdV, taccdVsdV);
@@ -877,7 +887,7 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
     Tensor gdV = make_tensor(make_gmem_ptr(reinterpret_cast<Element *>(params.dv_ptr) + row_offset_dv),
                              Shape<Int<kBlockN>, Int<kHeadDim>>{},
                              make_stride(params.dv_row_stride, _1{}));
-    debug_printf0("HERE X27\n");
+    printf0("HERE X27\n");
 
     typename Kernel_traits::GmemTiledCopydKV gmem_tiled_copy_dKV;
     auto gmem_thr_copy_dKV = gmem_tiled_copy_dKV.get_thread_slice(tidx);
@@ -887,7 +897,7 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
     Tensor tdVgdV = gmem_thr_copy_dKV.partition_D(gdV);
 
     __syncthreads();
-    debug_printf0("HERE X28\n");
+    printf0("HERE X28\n");
     Tensor tdKrdK = make_tensor<Element>(shape(tdKgdK));
     cute::copy(gmem_tiled_copy_dKV, tdKsdK, tdKrdK);
     Tensor tdVrdV = make_tensor<Element>(shape(tdVgdV));
@@ -904,7 +914,7 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
     flash::copy<Is_even_MN, Is_even_K, /*Clear_OOB_MN=*/false, /*Clear_OOB_K=*/false>(
         gmem_tiled_copy_dKV, tdVrdV, tdVgdV, tdKVcdKV, tdKVpdKV, binfo.actual_seqlen_k - n_block * kBlockN
     );
-    debug_printf0("HERE X29\n");
+    printf0("HERE X29\n");
 
 }
 
@@ -944,7 +954,7 @@ inline __device__ void compute_dq_dk_dv_seqk_parallel(const Params &params) {
     const int bidb = blockIdx.y;
     // The block index for the head.
     const int bidh = blockIdx.z;
-
+    printf0("Doing compute_dq_dk_dv_seqk_parallel\n");
     // If deterministic, each thread block will do atomicAdd to a different dQ_accum buffer.
     for (int n_block = blockIdx.x; n_block < (params.seqlen_k + Kernel_traits::kBlockN - 1) / Kernel_traits::kBlockN; n_block += gridDim.x) {
         compute_dq_dk_dv_1colblock<Kernel_traits, Is_dropout, Is_causal, Is_local, Has_alibi, Has_RPE, Is_even_MN, Is_even_K, false, false, /*Seq_parallel=*/true>(params, bidb, bidh, n_block);
