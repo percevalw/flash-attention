@@ -17,6 +17,7 @@
 #define CHECK_SHAPE(x, ...) TORCH_CHECK(x.sizes() == torch::IntArrayRef({__VA_ARGS__}), #x " must have shape (" #__VA_ARGS__ ")")
 #define CHECK_CONTIGUOUS(x) TORCH_CHECK(x.is_contiguous(), #x " must be contiguous")
 
+#define debug_printf(...) // printf(__VA_ARGS__)
 
 void set_params_fprop(Flash_fwd_params &params,
                       // sizes
@@ -67,19 +68,6 @@ void set_params_fprop(Flash_fwd_params &params,
     params.o_row_stride = out.stride(-3);
     params.o_head_stride = out.stride(-2);
 
-    if (cu_seqlens_q_d == nullptr) {
-        params.q_batch_stride = q.stride(0);
-        params.k_batch_stride = k.stride(0);
-        params.v_batch_stride = v.stride(0);
-        params.o_batch_stride = out.stride(0);
-        if (seqlenq_ngroups_swapped) {
-             params.q_batch_stride *= seqlen_q;
-             if (num_pos > 0) {
-                 params.qp_batch_stride *= seqlen_q;
-             }
-             params.o_batch_stride *= seqlen_q;
-        }
-    }
 
     if (qp.has_value()) {
         params.qp_ptr = qp.value().data_ptr();
@@ -90,6 +78,23 @@ void set_params_fprop(Flash_fwd_params &params,
             if (seqlenq_ngroups_swapped) {
                 params.qp_batch_stride *= seqlen_q;
             }
+        }
+    }
+
+    if (cu_seqlens_q_d == nullptr) {
+        params.q_batch_stride = q.stride(0);
+        params.k_batch_stride = k.stride(0);
+        params.v_batch_stride = v.stride(0);
+        params.o_batch_stride = out.stride(0);
+        if (cu_seqlens_q_d == nullptr) {
+            params.qp_batch_stride = qp.value().stride(0);
+        }
+        if (seqlenq_ngroups_swapped) {
+             params.q_batch_stride *= seqlen_q;
+             params.o_batch_stride *= seqlen_q;
+             if (cu_seqlens_q_d == nullptr) {
+                 params.qp_batch_stride *= seqlen_q;
+             }
         }
     }
 
@@ -559,6 +564,7 @@ mha_varlen_fwd(at::Tensor &q,  // total_q x num_heads x head_size, total_q := \s
     TORCH_CHECK(is_sm90 || is_sm8x, "FlashAttention only supports Ampere GPUs or newer.");
     // We will support Turing in the near future
     // TORCH_CHECK(is_sm90 || is_sm8x || is_sm75, "FlashAttention only supports Turing GPUs or newer.");
+    debug_printf("HERE: 1\n");
 
     auto q_dtype = q.dtype();
     TORCH_CHECK(q_dtype == torch::kFloat16 || q_dtype == torch::kBFloat16,
@@ -574,7 +580,7 @@ mha_varlen_fwd(at::Tensor &q,  // total_q x num_heads x head_size, total_q := \s
     CHECK_DEVICE(q); CHECK_DEVICE(k); CHECK_DEVICE(v);
     CHECK_DEVICE(cu_seqlens_q);
     CHECK_DEVICE(cu_seqlens_k);
-
+    debug_printf("HERE: 2\n");
     at::Tensor block_table;
     const bool paged_KV = block_table_.has_value();
     if (paged_KV) {
@@ -589,7 +595,7 @@ mha_varlen_fwd(at::Tensor &q,  // total_q x num_heads x head_size, total_q := \s
     TORCH_CHECK(v.stride(-1) == 1, "Input tensor must have contiguous last dimension");
     CHECK_CONTIGUOUS(cu_seqlens_q);
     CHECK_CONTIGUOUS(cu_seqlens_k);
-
+    debug_printf("HERE: 3\n");
     const auto sizes = q.sizes();
 
     const int batch_size = cu_seqlens_q.numel() - 1;
@@ -604,7 +610,7 @@ mha_varlen_fwd(at::Tensor &q,  // total_q x num_heads x head_size, total_q := \s
 
     if (max_seqlen_q == 1 && !alibi_slopes_.has_value()) { is_causal = false; }  // causal=true is the same as causal=false in this case
     if (is_causal) { window_size_right = 0; }
-
+    debug_printf("HERE: 4\n");
     void *cu_seqlens_q_d = cu_seqlens_q.data_ptr();
 
     // Faster to transpose q from (b, 1, (nheads_kv ngroups), d) to (b, ngroups, nheads_kv, d) in this case
@@ -626,7 +632,7 @@ mha_varlen_fwd(at::Tensor &q,  // total_q x num_heads x head_size, total_q := \s
 
     if (window_size_left >= max_seqlen_k) { window_size_left = -1; }
     if (window_size_right >= max_seqlen_k) { window_size_right = -1; }
-
+    debug_printf("HERE: 5\n");
     CHECK_SHAPE(q, total_q, num_heads, head_size_og);
     if (!paged_KV) {
         const int total_k = k.size(0);
@@ -647,7 +653,7 @@ mha_varlen_fwd(at::Tensor &q,  // total_q x num_heads x head_size, total_q := \s
         TORCH_CHECK(seqused_k_.is_contiguous(), "seqused_k must be contiguous");
         CHECK_SHAPE(seqused_k_, batch_size);
     }
-
+    debug_printf("HERE: 6\n");
     at::Tensor q_padded, k_padded, v_padded;
     c10::optional<at::Tensor> qp_padded;
     if (head_size_og % 8 != 0) {
@@ -663,7 +669,7 @@ mha_varlen_fwd(at::Tensor &q,  // total_q x num_heads x head_size, total_q := \s
         v_padded = v;
         qp_padded = qp;
     }
-
+    debug_printf("HERE: 7\n");
     at::Tensor out;
     if (out_.has_value()) {
         out = out_.value();
@@ -679,7 +685,7 @@ mha_varlen_fwd(at::Tensor &q,  // total_q x num_heads x head_size, total_q := \s
     } else {
         out = torch::empty_like(q_padded);
     }
-
+    debug_printf("HERE: 8\n");
     auto round_multiple = [](int x, int m) { return (x + m - 1) / m * m; };
     const int head_size = round_multiple(head_size_og, 8);
     const int head_size_rounded = round_multiple(head_size, 32);
@@ -705,7 +711,7 @@ mha_varlen_fwd(at::Tensor &q,  // total_q x num_heads x head_size, total_q := \s
         softmax_lse.fill_(-std::numeric_limits<float>::infinity());
         if (return_softmax) {p.zero_();}
     }
-
+    debug_printf("HERE: 9\n");
     Flash_fwd_params params;
     set_params_fprop(params,
                      batch_size,
@@ -739,7 +745,7 @@ mha_varlen_fwd(at::Tensor &q,  // total_q x num_heads x head_size, total_q := \s
                            head_size, max_seqlen_k, max_seqlen_q,
                            head_size_rounded, p_dropout, /*num_splits*/0, dprops, opts);
     }
-
+    debug_printf("HERE: 10\n");
     // number of times random will be generated per thread, to offset philox counter in thc random
     // state
     // We use a custom RNG that increases the offset by batch_size * nheads * 32.
@@ -756,7 +762,7 @@ mha_varlen_fwd(at::Tensor &q,  // total_q x num_heads x head_size, total_q := \s
         std::lock_guard<std::mutex> lock(gen->mutex_);
         params.philox_args = gen->philox_cuda_state(counter_offset);
     }
-
+    debug_printf("HERE: 11\n");
     set_params_alibi(params, alibi_slopes_, batch_size, num_heads);
 
     if (max_seqlen_k > 0) {
@@ -767,7 +773,7 @@ mha_varlen_fwd(at::Tensor &q,  // total_q x num_heads x head_size, total_q := \s
         out.zero_();
         softmax_lse.fill_(std::numeric_limits<float>::infinity());
     }
-
+    debug_printf("HERE: 12\n");
     at::Tensor out_padded = out;
     if (head_size_og % 8 != 0) {
         out = out.index({"...", torch::indexing::Slice(torch::indexing::None, head_size_og)});
@@ -782,6 +788,7 @@ mha_varlen_fwd(at::Tensor &q,  // total_q x num_heads x head_size, total_q := \s
         q_padded = q_padded.reshape(size_before).transpose(1, 2).reshape(size_after);
         softmax_lse = softmax_lse.reshape({batch_size, num_heads_k * max_seqlen_q, 1});
     }
+    debug_printf("HERE: 13\n");
 
     return {out, q_padded, k_padded, v_padded, out_padded, softmax_lse, p, rng_state};
 }
