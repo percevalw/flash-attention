@@ -17,7 +17,7 @@
 #define CHECK_SHAPE(x, ...) TORCH_CHECK(x.sizes() == torch::IntArrayRef({__VA_ARGS__}), #x " must have shape (" #__VA_ARGS__ ")")
 #define CHECK_CONTIGUOUS(x) TORCH_CHECK(x.is_contiguous(), #x " must be contiguous")
 
-#define debug_printf(...) // printf(__VA_ARGS__)
+#define debug_printf(...) printf(__VA_ARGS__)
 
 void set_params_fprop(Flash_fwd_params &params,
                       // sizes
@@ -773,20 +773,32 @@ mha_varlen_fwd(at::Tensor &q,  // total_q x num_heads x head_size, total_q := \s
         out.zero_();
         softmax_lse.fill_(std::numeric_limits<float>::infinity());
     }
-    debug_printf("HERE: 12\n");
+    debug_printf("HERE: 12 x\n");
     at::Tensor out_padded = out;
+    debug_printf("HERE: a\n");
     if (head_size_og % 8 != 0) {
+        debug_printf("HERE: b\n");
         out = out.index({"...", torch::indexing::Slice(torch::indexing::None, head_size_og)});
+        debug_printf("HERE: c\n");
         if (out_.has_value()) { out_.value().copy_(out); }
+        debug_printf("HERE: d\n");
     }
 
+    debug_printf("HERE: e\n");
     if (seqlenq_ngroups_swapped) {
+        debug_printf("HERE: f\n");
         int64_t size_before[] = {batch_size, max_seqlen_q, num_heads_k, head_size_og};
+        debug_printf("HERE: g\n");
         int64_t size_after[] = {batch_size, num_heads_k * max_seqlen_q, head_size_og};
+        debug_printf("HERE: h\n");
         out = out.reshape(size_before).transpose(1, 2).reshape(size_after);
+        debug_printf("HERE: i\n");
         out_padded = out_padded.reshape(size_before).transpose(1, 2).reshape(size_after);
+        debug_printf("HERE: j\n");
         q_padded = q_padded.reshape(size_before).transpose(1, 2).reshape(size_after);
+        debug_printf("HERE: k\n");
         softmax_lse = softmax_lse.reshape({batch_size, num_heads_k * max_seqlen_q, 1});
+        debug_printf("HERE: l\n");
     }
     debug_printf("HERE: 13\n");
 
@@ -836,6 +848,8 @@ mha_bwd(const at::Tensor &dout,  // batch_size x seqlen_q x num_heads, x head_si
     // We will support Turing in the near future
     // TORCH_CHECK(is_sm90 || is_sm8x || is_sm75, "FlashAttention only supports Turing GPUs or newer.");
 
+    debug_printf("HERE: 1\n");
+
     bool is_dropout = p_dropout > 0.0;
     auto stream = at::cuda::getCurrentCUDAStream().stream();
 
@@ -850,6 +864,8 @@ mha_bwd(const at::Tensor &dout,  // batch_size x seqlen_q x num_heads, x head_si
     TORCH_CHECK(out.dtype() == q_dtype, "query and out must have the same dtype");
     TORCH_CHECK(dout.dtype() == q_dtype, "query and dout must have the same dtype");
 
+    debug_printf("HERE: 2\n");
+
     CHECK_DEVICE(q); CHECK_DEVICE(k); CHECK_DEVICE(v);
     CHECK_DEVICE(out); CHECK_DEVICE(dout); CHECK_DEVICE(softmax_lse);
 
@@ -858,6 +874,7 @@ mha_bwd(const at::Tensor &dout,  // batch_size x seqlen_q x num_heads, x head_si
     TORCH_CHECK(v.stride(-1) == 1, "Input tensor must have contiguous last dimension");
     TORCH_CHECK(out.stride(-1) == 1, "out tensor must have contiguous last dimension");
     TORCH_CHECK(dout.stride(-1) == 1, "dout tensor must have contiguous last dimension");
+    debug_printf("HERE: 3\n");
 
     const auto sizes = q.sizes();
 
@@ -876,6 +893,7 @@ mha_bwd(const at::Tensor &dout,  // batch_size x seqlen_q x num_heads, x head_si
         TORCH_CHECK(is_sm80 || is_sm90, "FlashAttention backward for head dim 256 with dropout, or head dim 224 with/without dropout requires A100/A800 or H100/H800");
     }
     TORCH_CHECK(num_heads % num_heads_k == 0, "Number of heads in key/value must divide number of heads in query");
+    debug_printf("HERE: 4\n");
 
     auto round_multiple = [](int x, int m) { return (x + m - 1) / m * m; };
     const int head_size_rounded = round_multiple(head_size, 32);
@@ -886,6 +904,7 @@ mha_bwd(const at::Tensor &dout,  // batch_size x seqlen_q x num_heads, x head_si
 
     if (window_size_left >= seqlen_k) { window_size_left = -1; }
     if (window_size_right >= seqlen_k) { window_size_right = -1; }
+    debug_printf("HERE: 5\n");
 
     CHECK_SHAPE(q, batch_size, seqlen_q, num_heads, head_size);
     CHECK_SHAPE(k, batch_size, seqlen_k, num_heads_k, head_size);
@@ -893,6 +912,7 @@ mha_bwd(const at::Tensor &dout,  // batch_size x seqlen_q x num_heads, x head_si
     CHECK_SHAPE(out, batch_size, seqlen_q, num_heads, head_size);
     CHECK_SHAPE(dout, batch_size, seqlen_q, num_heads, head_size_og);
 
+    debug_printf("HERE: 6\n");
     at::Tensor dq, dk, dv, dqp;
     if (dq_.has_value()) {
         dq = dq_.value();
@@ -921,6 +941,7 @@ mha_bwd(const at::Tensor &dout,  // batch_size x seqlen_q x num_heads, x head_si
     } else {
         dv = torch::empty_like(v);
     }
+    debug_printf("HERE: 7\n");
     if (dqp_.has_value()) {
         TORCH_CHECK(qp.has_value(), "dqp provided but qp is not");
         dqp = dqp_.value();
@@ -932,6 +953,7 @@ mha_bwd(const at::Tensor &dout,  // batch_size x seqlen_q x num_heads, x head_si
     } else {
         dqp = torch::empty_like(qp.value());
     }
+    debug_printf("HERE: 8\n");
 
     at::Tensor dout_padded;
     if (head_size_og % 8 != 0) {
@@ -947,6 +969,7 @@ mha_bwd(const at::Tensor &dout,  // batch_size x seqlen_q x num_heads, x head_si
     // Otherwise the kernel will be launched from cuda:0 device
     // Cast to char to avoid compiler warning about narrowing
     at::cuda::CUDAGuard device_guard{(char)q.get_device()};
+    debug_printf("HERE: 9\n");
 
     auto opts = q.options();
     auto softmax_d = torch::empty({batch_size, num_heads, seqlen_q_rounded}, opts.dtype(at::kFloat));
@@ -965,6 +988,7 @@ mha_bwd(const at::Tensor &dout,  // batch_size x seqlen_q x num_heads, x head_si
         // dk_accum = torch::empty({batch_size, num_heads_k, seqlen_k_rounded, head_size_rounded}, opts.dtype(at::kFloat));
         // dv_accum = torch::empty({batch_size, num_heads_k, seqlen_k_rounded, head_size_rounded}, opts.dtype(at::kFloat));
     }
+    debug_printf("HERE: 10\n");
 
     at::Tensor dk_expanded, dv_expanded;
     if (num_heads_k != num_heads) {  // MQA / GQA
@@ -1001,6 +1025,7 @@ mha_bwd(const at::Tensor &dout,  // batch_size x seqlen_q x num_heads, x head_si
                      deterministic);
     params.dq_accum_split_stride = !deterministic ? 0 : dq_accum.stride(0);
     params.dqp_accum_split_stride = !deterministic ? 0 : dqp_accum.stride(0);
+    debug_printf("HERE: 11\n");
 
     auto launch = &run_mha_bwd;
 
@@ -1022,6 +1047,7 @@ mha_bwd(const at::Tensor &dout,  // batch_size x seqlen_q x num_heads, x head_si
     }
 
     set_params_alibi(params, alibi_slopes_, batch_size, num_heads);
+    debug_printf("HERE: 12\n");
 
     if (seqlen_q > 0) {
         launch(params, stream);
@@ -1031,6 +1057,7 @@ mha_bwd(const at::Tensor &dout,  // batch_size x seqlen_q x num_heads, x head_si
         dv_expanded.zero_();
         softmax_d.zero_();
     }
+    debug_printf("HERE: 12 post\n");
 
     // For MQA/GQA we need to sum dK and dV across the groups
     if (num_heads_k != num_heads) {
@@ -1042,6 +1069,7 @@ mha_bwd(const at::Tensor &dout,  // batch_size x seqlen_q x num_heads, x head_si
         dk = dk.index({"...", torch::indexing::Slice(torch::indexing::None, head_size_og)});
         dv = dv.index({"...", torch::indexing::Slice(torch::indexing::None, head_size_og)});
     }
+    debug_printf("HERE: 13\n");
 
     return { dq, dk, dv, softmax_d };
 }

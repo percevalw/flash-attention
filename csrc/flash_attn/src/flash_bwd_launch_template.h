@@ -27,7 +27,6 @@
 template<typename Kernel_traits, __VA_ARGS__> \
 __global__ void kernelName(KERNEL_PARAM_MODIFIER const Flash_bwd_params params)
 
-
 DEFINE_FLASH_BACKWARD_KERNEL(flash_bwd_dq_dk_dv_loop_kernel, bool Is_dropout, bool Is_causal, bool Has_alibi, bool Has_RPE, bool Is_even_M, bool Is_even_K) {
     #if defined(ARCH_SUPPORTS_FLASH)
        flash::compute_dq_dk_dv<Kernel_traits, Is_dropout, Is_causal, Has_alibi, Has_RPE, Is_even_M, Is_even_K>(params);
@@ -100,11 +99,9 @@ void run_flash_bwd_seqk_parallel(Flash_bwd_params &params, cudaStream_t stream) 
                             // If not IsEvenKConst, we also set IsEvenMNConst to false to reduce number of templates.
                             // If head dim > 128, set IsEvenMNConst to false to reduce number of templates
                             // If Is_local, set Is_causal to false
-                            auto kernel = &flash_bwd_dq_dk_dv_loop_seqk_parallel_kernel<Kernel_traits, Is_dropout, Is_causal,
-                                    Is_local && !Is_causal, Has_alibi, Has_RPE, IsEvenMNConst && IsEvenKConst && !Is_local &&
-                                                                       Kernel_traits::kHeadDim <= 128, IsEvenKConst>;
+                            auto kernel = &flash_bwd_dq_dk_dv_loop_seqk_parallel_kernel<Kernel_traits, Is_dropout, Is_causal, Is_local && !Is_causal, Has_alibi, Has_RPE, IsEvenMNConst && IsEvenKConst && !Is_local && Kernel_traits::kHeadDim <= 128, IsEvenKConst>;
                             // auto kernel = &flash_bwd_dq_dk_dv_loop_seqk_parallel_kernel<Kernel_traits, false, Is_causal, false, false, true, true>;
-                            if (smem_size_dq_dk_dv >= 48 * 1024) {
+                            if (smem_size_dq_dk_dv >= 48 * 1024)  {
                                 C10_CUDA_CHECK(cudaFuncSetAttribute(
                                         kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size_dq_dk_dv));
                             }

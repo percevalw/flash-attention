@@ -23,27 +23,8 @@ namespace flash {
 using namespace cute;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
-template <typename T, typename U>
-struct TypeDisplayer; // Intentionally not defined
 
-// Step 1: Define the TypeWrapper structure
-template<int ID, typename T>
-struct TypeWrapper_____ {};
-
-template<typename... T>
-struct AlwaysFalse : std::false_type {};
-
-template<typename... T>
-void revealType() {
-    // Note: This will still cause a compilation error, but you're attempting to
-    // make the error message informative regarding the type of T.
-    static_assert(AlwaysFalse<T...>::value, "Revealing type, check the error message for details.");
-}
-
-
-template<
-    typename Kernel_traits, bool Is_dropout, bool Is_causal, bool Is_local, bool Has_alibi, bool Has_RPE, bool Is_even_MN, bool Is_even_K, bool Return_softmax, typename Params
->
+template<typename Kernel_traits, bool Is_dropout, bool Is_causal, bool Is_local, bool Has_alibi, bool Has_RPE, bool Is_even_MN, bool Is_even_K, bool Return_softmax, typename Params>
 inline __device__ void compute_attn_1rowblock(const Params &params, const int bidb, const int bidh, const int m_block) {
 
     using Element = typename Kernel_traits::Element;

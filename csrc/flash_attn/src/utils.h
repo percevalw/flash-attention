@@ -2,9 +2,6 @@
  * Copyright (c) 2023, Tri Dao.
  ******************************************************************************/
 
-#pragma clang diagnostic push
-#pragma ide diagnostic ignored "UnusedLocalVariable"
-#pragma ide diagnostic ignored "UnusedValue"
 #pragma once
 
 #include <assert.h>
@@ -411,5 +408,3 @@ __forceinline__ __device__ void copy_w_min_idx(Tensor<Engine0, Layout0> const &S
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 }  // namespace flash
-
-#pragma clang diagnostic pop
