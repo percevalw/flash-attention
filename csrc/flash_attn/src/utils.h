@@ -130,23 +130,6 @@ static __device__ __forceinline__ T run(T x, Operator &op) {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-/**
- * @brief General matrix-matrix multiplication.
- *
- * @tparam A_in_regs Whether to load (and preload for each next iteration) A (likely Q) into registers.
- * @tparam B_in_regs Whether to load (and preload for each next iteration) B (likely K) into registers.
- * @param acc The output tensor.
- * @param tCrA The register tensor that holds tile copy of A.
- * @param tCrB The register tensor that holds tile copy of B.
- * @param tCsA The shared memory tensor that holds the tile copy of A.
- * @param tCsB The shared memory tensor that holds the tile copy of B.
- * @param tiled_mma The tiled matrix-matrix multiplication functor, ie how to perform the matrix-matrix multiplication, depending on the architecture
- *               of the GPU (i think).
- * @param smem_tiled_copy_A The tiled copy functor for A.
- * @param smem_tiled_copy_B The tiled copy functor for B.
- * @param smem_thr_copy_A The thread copy functor for A.
- * @param smem_thr_copy_B The thread copy functor for B.
- */
 template<bool A_in_regs=false, bool B_in_regs=false, typename Tensor0, typename Tensor1,
          typename Tensor2, typename Tensor3, typename Tensor4,
          typename TiledMma, typename TiledCopyA, typename TiledCopyB,

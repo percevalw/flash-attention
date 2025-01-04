@@ -184,7 +184,7 @@ struct Flash_bwd_kernel_traits : public Base {
     static constexpr bool No_double_buffer = No_double_buffer_;
 
     // The number of threads.
-    static constexpr int kNWarps = kNWarps_;
+    static constexpr int kNWarps = kNWarps_;  // likely 8 thread groups ? or groups of 8 threads ?
     static constexpr int kNThreads = kNWarps * 32;
 
     static constexpr int kBlockM = kBlockM_;
@@ -205,15 +205,22 @@ struct Flash_bwd_kernel_traits : public Base {
         Layout<Shape<Int<AtomLayoutMSdP>, Int<kNWarps / AtomLayoutMSdP>, _1>>,
         Tile<Int<16 * AtomLayoutMSdP>, Int<16 * kNWarps / AtomLayoutMSdP>, _16>>;
 
+    // Do we really need this ?
+    // dQP tiling, using the same thread replication as dS (TiledMmaSdP)
+    using TiledMmadQP = TiledMMA<
+        typename Base::MMA_Atom_Arch, // same atom as above since we will align the computations
+        Layout<Shape<Int<AtomLayoutMSdP>, Int<kNWarps / AtomLayoutMSdP>, _1>>,  // same as above
+        Tile<Int<16 * AtomLayoutMSdP>, Int<16 * kNWarps / AtomLayoutMSdP>, _128>>;  // each thread needs to handle all K=128 (meaning num_pos for QP)
+
     using TiledMmadKV = TiledMMA<
         typename Base::MMA_Atom_Arch,
         Layout<Shape<Int<AtomLayoutNdKV>, Int<kNWarps / AtomLayoutNdKV>, _1>>,
         Tile<Int<16 * AtomLayoutNdKV>, Int<16 * kNWarps / AtomLayoutNdKV>, _16>>;
 
     using TiledMmadQ = TiledMMA<
-        typename Base::MMA_Atom_Arch,
-        Layout<Shape<Int<AtomLayoutMdQ>, Int<kNWarps / AtomLayoutMdQ>, _1>>,  // 2x4x1 or 4x2x1 thread group
-        Tile<Int<16 * AtomLayoutMdQ>, Int<16 * kNWarps / AtomLayoutMdQ>, _16>>;
+        typename Base::MMA_Atom_Arch, // eg. SM80_16x8x16_F32F16F16F32_TN
+        Layout<Shape<Int<AtomLayoutMdQ>, Int<kNWarps / AtomLayoutMdQ>, _1>>,  // replicate the atom across 2x4x1 or 4x2x1 thread group(s?)
+        Tile<Int<16 * AtomLayoutMdQ>, Int<16 * kNWarps / AtomLayoutMdQ>, _16>>;  // expand the tile to this size by replicating it across values (each thread will need to loop more)
 
     using SmemLayoutAtomQdO = decltype(
         composition(Swizzle<kSwizzle, 3, 3>{},
@@ -223,12 +230,12 @@ struct Flash_bwd_kernel_traits : public Base {
         SmemLayoutAtomQdO{},
         make_shape(Int<kBlockM>{}, Int<kHeadDim>{})));
 
-    using SmemLayoutAtomQPdO = decltype(
+    using SmemLayoutAtomQP = decltype(
         composition(Swizzle<kSwizzle, 3, 3>{},
                     Layout<Shape<_8, Int<128>>,
                            Stride<Int<128>, _1>>{}));
-    using SmemLayoutQPdO = decltype(tile_to_shape(
-        SmemLayoutAtomQPdO{},
+    using SmemLayoutQP = decltype(tile_to_shape(
+        SmemLayoutAtomQP{},
         make_shape(Int<kBlockM>{}, Int<128>{})));
 
     using SmemLayoutAtomKV = decltype(
@@ -288,9 +295,18 @@ struct Flash_bwd_kernel_traits : public Base {
     using SmemLayoutdQ = decltype(tile_to_shape(
         SmemLayoutAtomdQ{},
         make_shape(Int<kBlockM>{}, Int<kHeadDim>{})));
-    using SmemLayoutdQP = decltype(tile_to_shape(
-        SmemLayoutAtomdQ{},
-        make_shape(Int<kBlockM>{}, Int<128>{})));
+
+    using SmemLayoutAtomdQP = decltype(
+        composition(Swizzle<kSwizzle, 3, 3>{},
+                    Layout<Shape<_8, Int<kBlockKSmem>>,
+                           Stride<Int<kBlockKSmem>, _1>>{}));
+    using SmemLayoutdQP = decltype(
+        tile_to_shape(
+            SmemLayoutAtomdQP{},
+            make_shape(Int<kBlockM>{}, Int<128>{}) // or params.num_pos
+        )
+    );
+
     using SmemCopyAtomdQ = Copy_Atom<DefaultCopy, elem_type>;
 
     // Double buffer for sQ
@@ -299,14 +315,13 @@ struct Flash_bwd_kernel_traits : public Base {
     static constexpr int kSmemdSSize = size(SmemLayoutPdS{}) * sizeof(Element);
     static constexpr int kSmemPSize = size(SmemLayoutPdS{}) * sizeof(Element);
     static constexpr int kSmemdQSize = size(SmemLayoutdQ{}) * sizeof(Element);
-    static constexpr int kSmemdQPSize = size(SmemLayoutdQP{}) * sizeof(Element);
-    static constexpr int kSmemdQPdOSize = size(SmemLayoutQPdO{}) * sizeof(Element);
-    static constexpr int kSmemSize = kSmemQdOSize + kSmemdQPdOSize // + kSmemdQPSize
+    static constexpr int kSmemdQPSize = size(SmemLayoutQP{}) * sizeof(Element);
+    static constexpr int kSmemSize = kSmemQdOSize + kSmemdQPSize // + kSmemdQPSize
         + (!Is_V_in_regs
            ? kSmemKVSize + kSmemdSSize + std::max(kSmemPSize, kSmemdQSize)
            : std::max(kSmemKVSize, kSmemKVSize / 2 + kSmemdSSize + std::max(kSmemPSize, kSmemdQSize)));
     // okay for 163840
-    static constexpr int kSmemSize1colblock = kSmemQdOSize + kSmemdQPdOSize // + kSmemdQPSize
+    static constexpr int kSmemSize1colblock = kSmemQdOSize + kSmemdQPSize // + kSmemdQPSize
         + (!Is_V_in_regs
            ? kSmemKVSize + kSmemdSSize + kSmemPSize
            : std::max(kSmemKVSize, kSmemKVSize / 2 + kSmemdSSize + kSmemPSize));

@@ -72,16 +72,6 @@ struct RelativePositionBias {
                             if constexpr (Has_RPE) {
                                 const int diff_idx = std::min(127, std::max(0, col_idx - row_idx + 64));
                                 const int block_row_idx = row_idx - row_block_idx_offset;
-                                /*if (row_idx < max_seqlen_k && col_idx < max_seqlen_q) {
-                                    print(
-                                      "\nBLOCK ROW=%d, ROW=%d, COL=%d, DIFF IDX=%d, mi=%d, nj=%d, i=%d, j=%d => QP=%f, S=%f\n",
-                                      block_row_idx, row_idx, col_idx,
-                                      diff_idx,
-                                      mi, nj, i, j,
-                                      float(sQP(block_row_idx, diff_idx)),
-                                      float(tensor(make_coord(i, mi), make_coord(j, nj)))
-                                    );
-                                }*/
                                 tensor(make_coord(i, mi), make_coord(j, nj)) += sQP(block_row_idx, diff_idx);
                             }
                         }

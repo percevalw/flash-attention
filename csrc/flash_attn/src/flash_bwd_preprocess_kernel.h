@@ -18,6 +18,11 @@ namespace flash {
 
 using namespace cute;
 
+// printf0 only prints when threadIdx.x == 0, threadIdx.y == 0, threadIdx.z == 0 and blockIdx.x == 0, blockIdx.y == 0, blockIdx.z == 0
+#define debug_printf0(...) // if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) { printf(__VA_ARGS__); }
+#define printf0(...) if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) { printf(__VA_ARGS__); }
+#define print0(...) if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) { print(__VA_ARGS__); }
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 template <int THREADS_PER_ROW, typename Engine0, typename Layout0, typename Engine1, typename Layout1>

@@ -56,13 +56,13 @@ __global__ void flash_bwd_clear_dkvaccum_kernel(const Flash_bwd_params params) {
 }
 
 template<typename Kernel_traits>
-__global__ void flash_bwd_convert_dq_kernel(const Flash_bwd_params params, const int nsplits) {
-    flash::convert_dQ<Kernel_traits>(params, nsplits);
+__global__ void flash_bwd_convert_dkv_kernel(const Flash_bwd_params params) {
+    flash::convert_dKV<Kernel_traits>(params);
 }
 
 template<typename Kernel_traits>
-__global__ void flash_bwd_convert_dkv_kernel(const Flash_bwd_params params) {
-    flash::convert_dKV<Kernel_traits>(params);
+__global__ void flash_bwd_convert_dq_kernel(const Flash_bwd_params params, const int nsplits) {
+    flash::convert_dQ<Kernel_traits>(params, nsplits);
 }
 
 template<typename Kernel_traits, bool Is_dropout>
@@ -121,6 +121,28 @@ void run_flash_bwd_seqk_parallel(Flash_bwd_params &params, cudaStream_t stream) 
     }
     kernel_dq<<<grid_m, Kernel_traits::kNThreads, Kernel_traits::kSmemdQSize, stream>>>(params, !params.deterministic ? 1 : gridDimx);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
+
+    // Only want to run convert_dQP when doing RPE
+    /*if (params.num_pos != 0 && params.dqp_accum_ptr != nullptr && params.dqp_ptr != nullptr) {
+        // The same smem size used for convert_dQ might be enough,
+        // or define "Kernel_traits::kSmemdQPSize" if different:
+        int smem_size = Kernel_traits::kSmemdQPSize;
+
+        // how many splits
+        int nsplits = (!params.deterministic ? 1 : gridDimx);
+
+        auto kernel_dqp = &flash_bwd_convert_dqp_kernel<Kernel_traits>;
+        if (smem_size >= 48 * 1024) {
+            C10_CUDA_CHECK(cudaFuncSetAttribute(
+                kernel_dqp,
+                cudaFuncAttributeMaxDynamicSharedMemorySize,
+                smem_size
+            ));
+        }
+        // Launch
+        kernel_dqp<<<grid_m, Kernel_traits::kNThreads, smem_size, stream>>>(params, nsplits);
+        C10_CUDA_KERNEL_LAUNCH_CHECK();
+    }*/
 }
 
 template<typename Kernel_traits, bool Is_dropout>
@@ -198,7 +220,7 @@ void run_mha_bwd_hdim64(Flash_bwd_params &params, cudaStream_t stream) {
 
     // run_flash_bwd<Flash_bwd_kernel_traits<Headdim, 128, 64, 4, 4, 2, 4, false, false, T>>(params, stream);
 }
-
+*/
 template<typename T>
 void run_mha_bwd_hdim96(Flash_bwd_params &params, cudaStream_t stream) {
     constexpr static int Headdim = 96;
@@ -223,7 +245,7 @@ void run_mha_bwd_hdim96(Flash_bwd_params &params, cudaStream_t stream) {
             run_flash_bwd<Flash_bwd_kernel_traits<Headdim, 64, 128, 8, 2, 4, 4, true, false, T>, Is_dropout>(params, stream);
         }
     });
-}*/
+}
 
 template<typename T>
 void run_mha_bwd_hdim128(Flash_bwd_params &params, cudaStream_t stream) {

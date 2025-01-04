@@ -131,21 +131,19 @@ struct Mask {
      *
      * @param tensor_ The block tensor to apply the mask to
      * @param tCrQP The QP tensor (RPE bias) to apply to the tensor
-     * @param col_block_idx_offset_ The column offset of the tensor
+     * @param col_idx_offset__ The column offset of the tensor
      * @param row_idx_offset The row offset of the tensor
      * @param warp_row_stride The stride of the rows
      */
-    template <bool Causal_mask=false, bool Is_even_MN=true, typename Engine, typename LayoutC, typename TensorQP>
-    __forceinline__ __device__ void apply_mask(
-            Tensor<Engine, LayoutC> &tensor_, // (MMA=4, MMA_M, MMA_N)
-            TensorQP &sQP,   // (kBlockM, kHeadDim)
-            const int col_block_idx_offset,   // = n_block * kBlockN
-            const int row_block_idx_offset,   // = m_block * kBlockM
-            const int row_thread_idx_offset,
-            const int warp_row_stride
-    ) {
+    template <bool Causal_mask=false, bool Is_even_MN=true, typename Engine, typename Layout, typename TensorQP>
+    __forceinline__ __device__ void apply_mask(Tensor<Engine, Layout> &tensor_, // (MMA=4, MMA_M, MMA_N)
+                                               TensorQP &sQP,   // (kBlockM, kHeadDim)
+                                               const int col_idx_offset_,   // = n_block * kBlockN
+                                               const int row_block_idx_offset,   // = m_block * kBlockM
+                                               const int row_idx_offset,
+                                               const int warp_row_stride) {
         static_assert(!(Causal_mask && Is_local), "Cannot be both causal and local");
-        static_assert(LayoutC::rank == 3, "Only support 3D Tensor");
+        static_assert(Layout::rank == 3, "Only support 3D Tensor");
         static_assert(decltype(size<0>(tensor_))::value == 4, "First dimension must be 4");
         static constexpr bool Need_masking = Has_alibi || Has_RPE || Causal_mask || Is_local || !Is_even_MN;
         // if (cute::thread0()) { printf("Has_alibi = %d, Causal_mask=%d, Is_local=%d, Is_even_MN = %d, Need_masking = %d\n", Has_alibi, Causal_mask, Is_local, Is_even_MN, Need_masking); }
@@ -158,7 +156,7 @@ struct Mask {
             static constexpr bool Col_idx_only = !Has_RPE && !(Has_alibi && !Is_causal) && !Is_local && !Causal_mask;
             const int lane_id = threadIdx.x % 32; // ranges from 0 to kBlockM = 128
             // col_idx_offset = n_block * kBlockN + (threadIdx.x % 4) * 2
-            const int col_idx_offset = col_block_idx_offset + (lane_id % 4) * 2;
+            const int col_idx_offset = col_idx_offset_ + (lane_id % 4) * 2;
             if constexpr (Col_idx_only) {
                 #pragma unroll
                 for (int mi = 0; mi < size<0>(tensor); ++mi) {
@@ -182,7 +180,7 @@ struct Mask {
                 // mi: 0..MMA_M = 0..kBlockM (?)
                 #pragma unroll
                 for (int mi = 0; mi < size<0, 1>(tensor); ++mi) {
-                    const int row_idx_base = row_thread_idx_offset + mi * warp_row_stride;
+                    const int row_idx_base = row_idx_offset + mi * warp_row_stride;
                     // i: [0, 1] (?)
                     #pragma unroll
                     for (int i = 0; i < size<0, 0>(tensor); ++i) {
@@ -208,17 +206,16 @@ struct Mask {
                                     const int diff_idx = std::min(127, std::max(0, col_idx - row_idx + 64));
                                     const int block_row_idx = row_idx - row_block_idx_offset;
                                     // const int block_col_idx = col_idx - col_block_idx_offset;
-                                    /*if (false) {//blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && threadIdx.x == 0) {
-                                        print(
-                                          "\nBLOCK ROW=%d, BLOCK COL=%d, ROW=%d, COL=%d, DIFF IDX=%d => QP=%f, S=%f\n",
-                                          block_row_idx, block_col_idx, row_idx, col_idx,
-                                          diff_idx,
-                                          float(sQP(block_row_idx, diff_idx)),
-                                          float(tensor(make_coord(i, mi), make_coord(j, nj)))
-                                        );
-                                    }*/
+                                    // if (false) {//blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && threadIdx.x == 0) {
+                                    //     print(
+                                    //       "\nBLOCK ROW=%d, BLOCK COL=%d, ROW=%d, COL=%d, DIFF IDX=%d => QP=%f, S=%f\n",
+                                    //       block_row_idx, block_col_idx, row_idx, col_idx,
+                                    //       diff_idx,
+                                    //       float(sQP(block_row_idx, diff_idx)),
+                                    //       float(tensor(make_coord(i, mi), make_coord(j, nj)))
+                                    //     );
+                                    // }
                                     tensor(make_coord(i, mi), make_coord(j, nj)) += sQP(block_row_idx, diff_idx); // tSrQP_(make_coord(i, mi), diff_idx);
-
                                 }
                                 if constexpr (Causal_mask) {
                                     if (col_idx >= col_idx_limit_right) {

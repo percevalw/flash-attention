@@ -28,6 +28,7 @@ using namespace cute;
 // printf0 only prints when threadIdx.x == 0, threadIdx.y == 0, threadIdx.z == 0 and blockIdx.x == 0, blockIdx.y == 0, blockIdx.z == 0
 #define debug_printf0(...) // if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) { printf(__VA_ARGS__); }
 #define printf0(...) if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) { printf(__VA_ARGS__); }
+#define print0(...) if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) { print(__VA_ARGS__); }
 
 template <int MMA_N,
           class... Args,
@@ -89,7 +90,6 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
 
     // Shared memory.
     extern __shared__ char smem_[];
-    debug_printf0("HERE top\n")
 
     // The thread index.
     const int tidx = threadIdx.x;
@@ -123,17 +123,18 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
         + (m_block_max - 1) * kBlockM * params.o_row_stride + bidh * params.o_head_stride;
     const index_t row_offset_dq = binfo.q_offset(params.dq_batch_stride, params.dq_row_stride, bidb)
         + (m_block_max - 1) * kBlockM * params.dq_row_stride + bidh * params.dq_head_stride;
-    const index_t row_offset_dqp = binfo.q_offset(params.dqp_batch_stride, params.dqp_row_stride, bidb)
-        + (m_block_max - 1) * kBlockM * params.dqp_row_stride + bidh * params.dqp_head_stride;
     const index_t row_offset_dq_accum = binfo.q_offset(params.seqlen_q_rounded * params.h * params.d_rounded, params.h * params.d_rounded, bidb)
         + ((m_block_max - 1) * kBlockM + (params.cu_seqlens_q == nullptr ? 0 : 128 * bidb)) * params.h * params.d_rounded + bidh * params.d_rounded
         // If deterministic, each thread block will do atomicAdd to a different dQ_accum buffer.
         + (!params.deterministic ? 0 : blockIdx.x * params.dq_accum_split_stride);
+    const index_t row_offset_dqp_accum = binfo.q_offset(params.seqlen_q_rounded * params.h * params.num_pos, params.h * params.num_pos, bidb)
+        + ((m_block_max - 1) * kBlockM + (params.cu_seqlens_q == nullptr ? 0 : params.num_pos * bidb)) * params.h * params.num_pos + bidh * params.num_pos
+        // If deterministic, each thread block will do atomicAdd to a different dQ_accum buffer.
+        + (!params.deterministic ? 0 : blockIdx.x * params.dqp_accum_split_stride);
     const index_t row_offset_lse = (bidb * params.h + bidh) * params.seqlen_q
         + (m_block_max - 1) * kBlockM;
     const index_t row_offset_dpsum = (bidb * params.h + bidh) * params.seqlen_q_rounded
         + (m_block_max - 1) * kBlockM;
-    debug_printf0("HERE begin\n")
 
     Tensor gQ = make_tensor(make_gmem_ptr(reinterpret_cast<Element *>(params.q_ptr) + row_offset_q),
                             Shape<Int<kBlockM>, Int<kHeadDim>>{},
@@ -153,19 +154,22 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
     Tensor gO = make_tensor(make_gmem_ptr(reinterpret_cast<Element *>(params.o_ptr) + row_offset_o),
                             Shape<Int<kBlockM>, Int<kHeadDim>>{},
                             make_stride(params.o_row_stride, _1{}));
-
     Tensor gdQ = make_tensor(make_gmem_ptr(reinterpret_cast<Element *>(params.dq_ptr) + row_offset_dq),
                              Shape<Int<kBlockM>, Int<kHeadDim>>{},
                              make_stride(params.dq_row_stride, _1{}));
     Tensor gdQaccum = make_tensor(make_gmem_ptr(reinterpret_cast<ElementAccum *>(params.dq_accum_ptr) + row_offset_dq_accum),
                                   Shape<Int<kBlockM>, Int<kHeadDim>>{},
                                   make_stride(params.h * params.d_rounded, _1{}));
-
-    Tensor gdQP = make_tensor(make_gmem_ptr(reinterpret_cast<Element *>(params.dqp_ptr) + row_offset_dqp),
-                             Shape<Int<kBlockM>, Int<128>>{},
-                             make_stride(params.dqp_row_stride, _1{}));
     // Tensor gdQPaccum = make_tensor(make_gmem_ptr(reinterpret_cast<ElementAccum *>(params.dqp_accum_ptr) + row_offset_dqp_accum),
     //                               Shape<Int<kBlockM>, Int<128>>{},
+    //                               make_stride(params.h * params.num_pos, _1{}));
+
+    // printf0("row_offset_dqp_accum in flash_bwd_kernel: %ld\n", row_offset_dqp_accum);
+    // printf0("gdQP in flash_bwd_kernel: ");
+    // print0(gdQP.layout());
+    // printf0("\n");
+
+    // Tensor gdQP = make_tensor(make_gmem_ptr(reinterpret_cast<ElementAccum *>(params.dqp_accum_ptr) + row_offset_dqp_accum),
     //                               make_stride(params.h * 128, _1{}));
 
     Tensor gLSE = make_tensor(make_gmem_ptr(reinterpret_cast<ElementAccum *>(params.softmax_lse_ptr) + row_offset_lse),
@@ -202,10 +206,7 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
 
     // sQP and sdQP share the same memory so be careful
     Tensor sQP = make_tensor(sdQ.data() + size(sdQ),
-                            typename Kernel_traits::SmemLayoutQPdO{});
-    Tensor sdQP = make_tensor(sQP.data(),
-                            typename Kernel_traits::SmemLayoutdQP{});
-    debug_printf0("HERE X0\n")
+                            typename Kernel_traits::SmemLayoutQP{});
 
     typename Kernel_traits::GmemTiledCopyQKV gmem_tiled_copy_QKV;
     auto gmem_thr_copy_QKV = gmem_tiled_copy_QKV.get_thread_slice(tidx);
@@ -225,7 +226,6 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
     >;
     GmemLayoutAtomdQaccum gmem_tiled_copy_dQaccum;
     auto gmem_thr_copy_dQaccum = gmem_tiled_copy_dQaccum.get_thread_slice(tidx);
-    debug_printf0("HERE X0 bis\n")
 
     Tensor tQgQ = gmem_thr_copy_QKV.partition_S(gQ);
     Tensor tQsQ = gmem_thr_copy_QKV.partition_D(sQ);
@@ -242,15 +242,11 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
     Tensor tdQgdQ = gmem_thr_copy_dQ.partition_D(gdQ);
     Tensor tdQgdQaccum = gmem_thr_copy_dQaccum.partition_D(gdQaccum);
 
-    Tensor tdQPsdQP = gmem_thr_copy_dQ.partition_S(sdQP);    // ((Atom,AtomNum),ATOM_M,ATOM_N)
-    Tensor tdQPgdQP = gmem_thr_copy_dQ.partition_D(gdQP);
-    // Tensor tdQPgdQPaccum = gmem_thr_copy_dQPaccum.partition_D(gdQPaccum);
     // if (cute::thread0()) { print(tdQgdQaccum.layout()); printf("\n"); }
     // __syncthreads();
     // if (blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && tidx < 64) {
     //     printf("tidx = %d, tdQgdQaccum = 0x%p\n", tidx, tdQgdQaccum.data());
     // }
-    debug_printf0("HERE X0 ter\n")
 
     typename Kernel_traits::TiledMmaSdP tiled_mma_sdp;
     auto thr_mma_sdp = tiled_mma_sdp.get_thread_slice(tidx);
@@ -266,6 +262,7 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
     Tensor tdVrPt = thr_mma_dkv.partition_fragment_A(sPtNoSwizzle);   // (MMA, MMA_N, MMA_N)
     Tensor tdVrdO = thr_mma_dkv.partition_fragment_B(sdOtransposedNoSwizzle); // (MMA, MMA_K, MMA_N)
 
+    // will be used to tile dQ
     typename Kernel_traits::TiledMmadQ tiled_mma_dq;
     auto thr_mma_dq = tiled_mma_dq.get_thread_slice(tidx);
     Tensor tdQrdS = thr_mma_dq.partition_fragment_A(sdS);                      // (MMA, MMA_N, MMA_N)
@@ -273,7 +270,6 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
 
     Tensor acc_dk = partition_fragment_C(tiled_mma_dkv, Shape<Int<kBlockN>, Int<kHeadDim>>{});  // MMA, MMA_N, MMA_K
     Tensor acc_dv = partition_fragment_C(tiled_mma_dkv, Shape<Int<kBlockN>, Int<kHeadDim>>{});  // MMA, MMA_N, MMA_K
-    debug_printf0("HERE X1\n");
 
     //
     // Copy Atom retiling
@@ -353,8 +349,6 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
     // We'll advance gdQ and gdQaccum before the 1st read/write.
     tdQgdQ.data() = tdQgdQ.data() + kBlockM * params.dq_row_stride;
     tdQgdQaccum.data() = tdQgdQaccum.data() + kBlockM * params.h * params.d_rounded;
-    tdQPgdQP.data() = tdQPgdQP.data() + kBlockM * params.dqp_row_stride;
-    // tdQPgdQPaccum.data() = tdQPgdQPaccum.data() + kBlockM * params.h * params.num_pos;
 
     int m_block = m_block_max - 1;
     int m_block_min = (!Is_causal && !Is_local)
@@ -612,6 +606,7 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
         CUTE_STATIC_ASSERT_V(size<2>(acc_dp) == size<2>(acc_s));                     // MMA
 
         clear(acc_dp);
+
         // Tensor acc_dp_reshaped = make_tensor(acc_dp.data(), flash::convert_layout_acc_rowcol(acc_dp.layout()));
         // #pragma unroll
         // for (int mi = 0; mi < size<0>(acc_dp_reshaped); ++mi) {
@@ -628,6 +623,17 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
             smem_tiled_copy_QdO, smem_tiled_copy_KV, smem_thr_copy_QdO, smem_thr_copy_KV
         );
 
+        /* -----------------------------------------
+         * Compute dS from dP (given P = softmax(S))
+         * ----------------------------------------- */
+
+        const index_t row_offset_dqp = binfo.q_offset(params.dqp_batch_stride, params.dqp_row_stride, bidb)
+        + m_block * kBlockM * params.dqp_row_stride + bidh * params.dqp_head_stride;
+
+        Tensor gdQP = make_tensor(make_gmem_ptr(reinterpret_cast<ElementAccum *>(params.dqp_ptr) + row_offset_dqp),
+                             Shape<Int<kBlockM>, Int<128>>{},
+                             make_stride(params.dqp_row_stride, _1{}));
+
         // Reshape acc_dp from (MMA=4, MMA_N, MMA_N) to (col=(2, MMA_N), row=(2, MMA_N))
         Tensor dS = make_tensor(acc_dp.data(), scores.layout());
         auto pointwise_mult = [](float p, float dp, float d) {
@@ -642,7 +648,8 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
             printf("\nsQP.layout() = "); print(sQP.layout());
             printf("\ngQP.layout() = "); print(gQP.layout());
         }*/
-        printf0("HERE X8\n");
+        const int lane_id = threadIdx.x % 32;
+        const int thread_col_idx_offset = col_idx_offset + (lane_id % 4) * 2;
         #pragma unroll
         for (int mi = 0; mi < size<0, 1>(dS); ++mi) {
             const int row_idx_base = row_idx_offset + mi * warp_row_stride;
@@ -650,12 +657,18 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
             for (int i = 0; i < size<0, 0>(dS); ++i) {
                 const int row_idx = row_idx_base + i * 8;
                 const int block_row_idx = row_idx - row_block_idx_offset;
+                if (row_idx >= binfo.actual_seqlen_q) {
+                    continue;
+                }
                 #pragma unroll
                 for (int nj = 0; nj < size<1, 1>(dS); ++nj) {
-                    const int col_idx_base = col_idx_offset + nj * 8;
+                    const int col_idx_base = thread_col_idx_offset + nj * 8;
                     #pragma unroll
                     for (int j = 0; j < size<1, 0>(dS); ++j) {
                         const int col_idx = col_idx_base + j;
+                        if (col_idx >= binfo.actual_seqlen_k) {
+                            continue;
+                        }
                         const int diff_idx = std::min(127, std::max(0, col_idx - row_idx + 64));
                         const float dS_val = pointwise_mult(
                             scores(make_coord(i, mi), make_coord(j, nj)),
@@ -665,30 +678,48 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
                             dP_sum(i + mi * stride<0, 0>(dS))
                         );
                         dS(make_coord(i, mi), make_coord(j, nj)) = dS_val;
+                        // if (block_row_idx == 0 && diff_idx == 64) {
+                        //     printf("=> before gdQP(%d, %d) = %f\n", block_row_idx, diff_idx, (double)gdQP(block_row_idx * params.dqp_row_stride + diff_idx));
+                        // }
                         // need to cast to half ?
-                        sdQP(block_row_idx, diff_idx) = sdQP(block_row_idx, diff_idx) + dS_val * params.scale_softmax_rp_dropout;
-                        // printf0("row_idx=%d, block_row_idx=%d, diff_idx=%d => dS_val=%f\n", row_idx, block_row_idx, diff_idx, float(dS_val) * params.scale_softmax_rp_dropout);
+                        // if (block_row_idx == 0 && diff_idx == 64) {
+                        //     printf("row_idx=%d, block_row_idx=%d, thread_idx=%d => dS=%f\n", row_idx, block_row_idx, threadIdx.x, (double)dS_val);
+                        // }
+                        // sdQP(block_row_idx, diff_idx) = sdQP(block_row_idx, diff_idx) + dS_val * params.scale_softmax_rp_dropout;
+
+                        // Direct atomic add
+                        atomicAdd(
+                            (&gdQP(block_row_idx, + diff_idx)),
+                            //(float)(diff_idx + row_idx * 1000)
+                            dS_val
+                        );
+                        // printf("write to block_row_idx (%d) row_offset_dqp (%ld), diff_idx (%d) = %ld -> %f vs stored %f\n", block_row_idx, row_offset_dqp, diff_idx, block_row_idx * params.dqp_row_stride + diff_idx, (double)dS_val, (double)gdQP(block_row_idx, diff_idx));
+                        // if (block_row_idx == 0 && diff_idx == 64) {
+                        //     printf("=> after gdQPaccum(%d, %d) = %f\n", block_row_idx, diff_idx, (double)gdQPaccum(block_row_idx * params.dqp_row_stride + diff_idx));
+                        // }
                     }
                 }
             }
         }
-        printf0("HERE X9\n");
 
         // if (cute::thread0()) { print(dS); }
 
+        // PW: Accumulate dQ into gdQ: first part, either clear register acc_dq, or fill it with already accumulated gdQ
+        // See below for the second part (ACC_DQ_SECOND_PART)
+        // If seq_parallel, we clear the register
         Tensor acc_dq = partition_fragment_C(tiled_mma_dq, Shape<Int<kBlockM>, Int<kHeadDim>>{});  // MMA, MMA_N, MMA_K
+        // TODO, redo partitioning to fit all positions into the tile
         tdQgdQaccum.data() = tdQgdQaccum.data() + (-int(kBlockM * params.h * params.d_rounded));
         if (Is_first || Seq_parallel) {
+            // Clear register acc_dq
             clear(acc_dq);
         } else {
             // Reshape acc_dq from (4, 1, 2) to (4, 2, 1) to write to gdQaccum
-            Tensor acc_dq_reshaped = make_tensor(acc_dq.data(),
-                                                 make_layout(get<0>(acc_dq.layout()),
-                                                             get<2>(acc_dq.layout()),
-                                                             get<1>(acc_dq.layout())));
+            // Fill register acc_dq with already accumulated gdQ
+            Tensor acc_dq_reshaped = make_tensor(acc_dq.data(), make_layout(get<0>(acc_dq.layout()), get<2>(acc_dq.layout()), get<1>(acc_dq.layout())));
             cute::copy(gmem_tiled_copy_dQaccum, tdQgdQaccum, acc_dq_reshaped);
         }
-        debug_printf0("HERE X10\n");
+
 
         if (Double_buffer && m_block > m_block_min) {
             // Double buffer for sQ
@@ -698,11 +729,19 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
             // Advance gQ
             tQgQ.data() = tQgQ.data() + (-int(kBlockM * params.q_row_stride));
             flash::copy</*Is_even_MN=*/true, Is_even_K>(gmem_tiled_copy_QKV, tQgQ, tQsQ, tQcQ, tQpQ);
+
+            // PW: Do the same for QP
+            // const int sQP_offset = m_block % 2 == 0 ? size(sQP) : -size(sQP);
+            // tQPgQP.data() = tQPgQP.data() + sQP_offset;
+            // tQPsQP.data() = tQPsQP.data() + sQP_offset;
+            // // Advance gQP
+            // tQPgQP.data() = tQPgQP.data() + (-int(kBlockM * params.qp_row_stride));
+            // flash::copy</*Is_even_MN=*/true, Is_even_K>(gmem_tiled_copy_QKV, tQPgQP, tQPsQP, tQcQ, tQpQ);
+
             flash::cp_async_fence();
         }
-        debug_printf0("HERE X11\n");
 
-        Tensor dS_reshaped = make_tensor(dS.data(), acc_dp.layout());
+        Tensor dS_reshaped = make_tensor(dS.data(), acc_dp.layout());  // undo what was done above when defining dS (?)
         // Convert dS from fp32 to fp16
         Tensor tdSrdS = flash::convert_type<Element>(dS_reshaped);
         // if (cute::thread0()) { print(tPrP); }
@@ -719,7 +758,6 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
                     smem_tiled_copy_PdSt, smem_tiled_copy_QdOt, smem_thr_copy_PdSt, smem_thr_copy_QdOt);
         // if (cute::thread0() && n_block == 0 && m_block == 0) { print(tdVrPt); }
         // if (cute::thread0()) { print(acc_dv); }
-        debug_printf0("HERE X12\n");
 
         __syncthreads(); // Need syncthreads since we're writing to the same sdO location
 
@@ -735,8 +773,8 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
                 flash::cp_async_fence();
             }
         }
-        debug_printf0("HERE X13\n");
 
+        // dQi <- dQi + dSi^(j) * Kj
         flash::gemm(acc_dq, tdQrdS, tdQrKt, tdQsdS, tdQsKt, tiled_mma_dq,
                     smem_tiled_copy_dS, smem_tiled_copy_Kt, smem_thr_copy_dS, smem_thr_copy_Kt);
         // if (cute::thread0()) { print(acc_dq); }
@@ -747,52 +785,54 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
             for (int mi = 0; mi < size(lse); ++mi) { lse(mi) = gLSE(get<0>(taccScS_row(mi))); }
             gdPsum.data() = gdPsum.data() + (-int(kBlockM));
         }
-        printf0("HERE X14 %d!\n", Is_last);
-        debug_printf0("HERE X14 again %d!\n", Is_last);
 
+        // PW: (ACC_DQ_SECOND_PART)
+        // Accumulate dQ into gdQ: second part, write acc_dq to gdQaccum
+        // printf0("Is seq_parallel: %d, Is_last: %d\n", Seq_parallel, Is_last);
         if (!Is_last) {
-            debug_printf0("HERE X15\n");
             // Reshape acc_dq from (4, 1, 2) to (4, 2, 1) to write to gdQaccum
-            Tensor acc_dq_reshaped = make_tensor(acc_dq.data(),
-                                                 make_layout(get<0>(acc_dq.layout()),
-                                                             get<2>(acc_dq.layout()),
-                                                             get<1>(acc_dq.layout())));
-            if (!Seq_parallel) {
+            Tensor acc_dq_reshaped = make_tensor(acc_dq.data(), make_layout(get<0>(acc_dq.layout()), get<2>(acc_dq.layout()), get<1>(acc_dq.layout())));
+            if (!Seq_parallel) { // default branch
                 cute::copy(gmem_tiled_copy_dQaccum, acc_dq_reshaped, tdQgdQaccum);
             } else {
-                // if (cute::thread0()) { print(acc_dq.layout()); printf("\n"); print(acc_dq_reshaped.layout()); printf("\n"); print(tdQgdQaccum.layout()); printf("\n"); }
+                // Accumulate acc_dq into gdQaccum
                 CUTE_STATIC_ASSERT_V(size(acc_dq) == size(tdQgdQaccum));
                 #pragma unroll
                 for (int i = 0; i < size(acc_dq); ++i) { atomicAdd(&tdQgdQaccum(i), acc_dq(i)); }
             }
-            debug_printf0("HERE X16\n");
         } else {
-            debug_printf0("HERE X17\n");
             #pragma unroll
             for (int i = 0; i < size(acc_dq); ++i) { acc_dq(i) *= params.scale_softmax_rp_dropout; }
             // Convert acc_dq from fp32 to fp16
             Tensor rdQ = flash::convert_type<Element>(acc_dq);
             Tensor taccdQrdQ = smem_thr_copy_dQ.retile_S(rdQ);  // ((Atom,AtomNum), MMA_N, MMA_N)
             cute::copy(smem_tiled_copy_dQ, taccdQrdQ, taccdQsdQ);
-            debug_printf0("HERE X18\n");
         }
-        printf0("HERE X19\n");
 
         flash::gemm(acc_dk, tdKrdSt, tdKrQt, tdKsdSt, tdKsQt, tiled_mma_dkv,
                     smem_tiled_copy_PdSt, smem_tiled_copy_QdOt, smem_thr_copy_PdSt, smem_thr_copy_QdOt);
-        debug_printf0("HERE X20\n");
         // if (cute::thread0()) { print(acc_dk); }
+        // TODO (PW): handle QP in these branches
         if (Double_buffer) {  // Double buffer for sQ
             tdKsQt.data() = tdKsQt.data() + (m_block % 2 == 0 ? size(sQ) : -size(sQ));
         }
-        if (!Double_buffer && m_block > m_block_min) {
+
+        // PW: Advance Q and QP
+        if (m_block > m_block_min) {
             __syncthreads();
-            // Advance gQ
-            tQgQ.data() = tQgQ.data() + (-int(kBlockM * params.q_row_stride));
-            flash::copy</*Is_even_MN=*/true, Is_even_K>(gmem_tiled_copy_QKV, tQgQ, tQsQ, tQcQ, tQpQ);
+
+            if (!Double_buffer) {
+                // Advance gQ
+                tQgQ.data() = tQgQ.data() + (-int(kBlockM * params.q_row_stride));
+                flash::copy</*Is_even_MN=*/true, Is_even_K>(gmem_tiled_copy_QKV, tQgQ, tQsQ, tQcQ, tQpQ);
+            }
+
+            // PW: Advance gQP (we don't do double buffering for QP for now)
+            tQPgQP.data() = tQPgQP.data() + (-int(kBlockM * params.qp_row_stride));
+            flash::copy</*Is_even_MN=*/true, Is_even_K>(gmem_tiled_copy_QKV, tQPgQP, tQPsQP, tQcQ, tQpQ);
+
             flash::cp_async_fence();
         }
-        debug_printf0("HERE X21\n Double_buffer=%d, m_block=%d, m_block_min=%d\n", Double_buffer, m_block, m_block_min);
 
         // COPY QP
         // if (m_block > m_block_min) {
@@ -807,10 +847,8 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
             dot_do_o<Kernel_traits::kGmemThreadsPerRow>(tdOrdO, tdOrO, gdPsum,
                                                         Kernel_traits::kNThreads / (Kernel_traits::kGmemThreadsPerRow), params.p_dropout);
         }
-        printf0("HERE X22\n");
 
         if (Is_last) {
-            printf0("HERE X23\n");
             __syncthreads();
             Tensor tdQrdQ = make_tensor<Element>(shape(tdQgdQ));
             cute::copy(gmem_tiled_copy_dQ, tdQsdQ, tdQrdQ);
@@ -821,29 +859,13 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
             for (int m = 0; m < size<1>(tdQgdQ); ++m) {
                 if (Is_even_MN || get<0>(tdQcdQ(0, m, 0)) < binfo.actual_seqlen_q - m_block * kBlockM) {
                     cute::copy(gmem_tiled_copy_dQ, tdQrdQ(_, m, _), tdQgdQ(_, m, _));
-                    cute::copy(gmem_tiled_copy_dQ, tdQPsdQP(_, m, _), tdQPgdQP(_, m, _));
                 }
             }
-            debug_printf0("HERE X24\n");
         }
-        {
-            printf0("HERE ZZZ\n");
-            __syncthreads();
-            Tensor cdQ = make_identity_tensor(Shape<Int<kBlockM>, Int<kHeadDim>>{});    // (BLK_M,BLK_K) -> (blk_m,blk_k)
-            Tensor tdQcdQ = gmem_thr_copy_dQ.partition_D(cdQ);
-            #pragma unroll
-            for (int m = 0; m < size<1>(tdQgdQ); ++m) {
-                if (Is_even_MN || get<0>(tdQcdQ(0, m, 0)) < binfo.actual_seqlen_q - m_block * kBlockM) {
-                    cute::copy(gmem_tiled_copy_dQ, tdQPsdQP(_, m, _), tdQPgdQP(_, m, _));
-                }
-            }
-            printf0("HERE ZZZ2\n");
-        }
-
     }
-    printf0("HERE X25\n");
 
     // Epilogue
+    // We only process dK and dV below, dQ has already been handled in the loop above
 
     if (Is_dropout) {
         #pragma unroll
@@ -872,7 +894,6 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
     // is reading it for dQ gemm, leading to a race condition.
     // If Is_last, there's already a __syncthreads() at the end of the loop.
     if (!Is_last) { __syncthreads(); }
-    printf0("HERE X26\n");
 
     cute::copy(smem_tiled_copy_dKV, taccdKrdK, taccdKsdK);
     cute::copy(smem_tiled_copy_dKV, taccdVrdV, taccdVsdV);
@@ -887,7 +908,6 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
     Tensor gdV = make_tensor(make_gmem_ptr(reinterpret_cast<Element *>(params.dv_ptr) + row_offset_dv),
                              Shape<Int<kBlockN>, Int<kHeadDim>>{},
                              make_stride(params.dv_row_stride, _1{}));
-    printf0("HERE X27\n");
 
     typename Kernel_traits::GmemTiledCopydKV gmem_tiled_copy_dKV;
     auto gmem_thr_copy_dKV = gmem_tiled_copy_dKV.get_thread_slice(tidx);
@@ -897,7 +917,6 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
     Tensor tdVgdV = gmem_thr_copy_dKV.partition_D(gdV);
 
     __syncthreads();
-    printf0("HERE X28\n");
     Tensor tdKrdK = make_tensor<Element>(shape(tdKgdK));
     cute::copy(gmem_tiled_copy_dKV, tdKsdK, tdKrdK);
     Tensor tdVrdV = make_tensor<Element>(shape(tdVgdV));
@@ -914,7 +933,14 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
     flash::copy<Is_even_MN, Is_even_K, /*Clear_OOB_MN=*/false, /*Clear_OOB_K=*/false>(
         gmem_tiled_copy_dKV, tdVrdV, tdVgdV, tdKVcdKV, tdKVpdKV, binfo.actual_seqlen_k - n_block * kBlockN
     );
-    printf0("HERE X29\n");
+
+    // Debug: print gdQPaccum
+    // if (tidx == 0 && bidb == 0 && bidh == 0) {
+    //     printf("gdQP offset=%ld:\n", row_offset_dqp);
+    //     for (int i = 0; i < size(gdQP); i++) {
+    //         printf("%d: %f\n", i, (double)gdQP(i));
+    //     }
+    // }
 
 }
 
@@ -931,6 +957,9 @@ inline __device__ void compute_dq_dk_dv(const Params &params) {
     // const int bidh = blockIdx.z;
     // The thread index.
     const int tidx = threadIdx.x;
+
+    // display kBlockM, kBlockN:
+    // printf0("kBlockM=%d, kBlockN=%d\n", Kernel_traits::kBlockM, Kernel_traits::kBlockN);
 
     const int n_block_max = (params.seqlen_k + Kernel_traits::kBlockN - 1) / Kernel_traits::kBlockN;
     if (n_block_max == 1) {
@@ -954,7 +983,10 @@ inline __device__ void compute_dq_dk_dv_seqk_parallel(const Params &params) {
     const int bidb = blockIdx.y;
     // The block index for the head.
     const int bidh = blockIdx.z;
-    printf0("Doing compute_dq_dk_dv_seqk_parallel\n");
+    // printf0("Doing compute_dq_dk_dv_seqk_parallel\n");
+
+    // printf0("kBlockM=%d, kBlockN=%d\n", Kernel_traits::kBlockM, Kernel_traits::kBlockN);
+
     // If deterministic, each thread block will do atomicAdd to a different dQ_accum buffer.
     for (int n_block = blockIdx.x; n_block < (params.seqlen_k + Kernel_traits::kBlockN - 1) / Kernel_traits::kBlockN; n_block += gridDim.x) {
         compute_dq_dk_dv_1colblock<Kernel_traits, Is_dropout, Is_causal, Is_local, Has_alibi, Has_RPE, Is_even_MN, Is_even_K, false, false, /*Seq_parallel=*/true>(params, bidb, bidh, n_block);
